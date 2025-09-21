@@ -597,7 +597,18 @@ def analysis_clauses(document_id):
         if not text:
             return jsonify({'error': 'Document text unavailable for analysis'}), 400
 
-        clauses = extract_and_score_clauses_from_text(text)
+        try:
+            clauses = extract_and_score_clauses_from_text(text)
+        except Exception as e:
+            logging.warning(f"LLM-driven clause extraction failed, using heuristic fallback: {e}")
+            try:
+                # Import heuristic extractor (public helper)
+                from analysis import heuristic_extract_and_score
+                clauses = heuristic_extract_and_score(text)
+            except Exception as e2:
+                logging.error(f"Heuristic clause extraction also failed: {e2}")
+                return jsonify({'error': 'Clause analysis failed and no fallback available'}), 500
+
         return jsonify({'clauses': clauses, 'document_id': document_id})
 
     except Exception as e:

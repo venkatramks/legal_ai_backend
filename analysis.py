@@ -12,9 +12,16 @@ except Exception:
     try:
         from llm_service import LLMService
     except Exception:
-        # Provide a lazy-import fallback: try to import at runtime when needed
-        def LLMService():
-            raise RuntimeError('LLMService unavailable in this environment')
+        # Provide a lightweight stub LLMService that signals unavailability.
+        # This prevents import-time/runtime-time exceptions and allows the
+        # analysis function to gracefully fall back to heuristic clause extraction.
+        class LLMService:
+            def __init__(self, *args, **kwargs):
+                pass
+            def is_available(self):
+                return False
+            # Optional methods that might be called by other code can raise
+            # or return safe defaults. We keep them absent where not needed.
 
 def extract_and_score_clauses_from_text(document_text: str) -> List[Dict[str, Any]]:
     """Attempt to extract clauses and score them for risk.
@@ -54,6 +61,17 @@ def extract_and_score_clauses_from_text(document_text: str) -> List[Dict[str, An
     except Exception as e:
         logging.warning(f"LLM clause extraction failed, falling back to heuristics: {e}")
 
+    # Fallback to heuristic extraction
+    return heuristic_extract_and_score(document_text)
+
+
+def heuristic_extract_and_score(document_text: str) -> List[Dict[str, Any]]:
+    """Heuristic-only clause extraction used as a robust fallback when LLM is unavailable.
+
+    This function mirrors the heuristic section of the previous implementation and is
+    intentionally kept public so callers can directly invoke it when LLM-driven
+    extraction fails.
+    """
     # Heuristic fallback: split by double newline or by sentences and produce basic scoring
     parts = [p.strip() for p in document_text.split('\n\n') if len(p.strip()) > 40]
     if not parts:
