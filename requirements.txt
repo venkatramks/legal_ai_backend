@@ -4,3 +4,6 @@ werkzeug
 openai
 python-dotenv
 requests
+pdfminer.six
+Pillow
+pytesseract

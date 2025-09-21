@@ -51,14 +51,54 @@ def import_services():
             OCRService = _OCR
             TextCleaner = _TC
     except Exception:
-        # Provide lightweight stubs if OCR-related packages are not available
-        class _OCRStub:
-            def extract_text(self, path):
+        # Provide lightweight stubs and a PDF/text-extraction fallback.
+        # Try to use pdfminer.six for extracting text from PDFs and Pillow+pytesseract
+        # for images if available. These imports are done lazily to avoid build-time
+        # failures on serverless hosts where system binaries (tesseract) may be missing.
+        try:
+            from pdfminer.high_level import extract_text as pdf_extract_text
+        except Exception:
+            pdf_extract_text = None
+
+        try:
+            from PIL import Image
+        except Exception:
+            Image = None
+
+        try:
+            import pytesseract
+        except Exception:
+            pytesseract = None
+
+        class _OCRFallback:
+            def extract_text(self, path: str) -> str:
+                # PDF extraction
+                if pdf_extract_text and path.lower().endswith('.pdf'):
+                    try:
+                        return pdf_extract_text(path) or ""
+                    except Exception:
+                        return ""
+
+                # Image extraction using pytesseract (if available and Tesseract binary installed)
+                if Image is not None and pytesseract is not None and path.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    try:
+                        img = Image.open(path)
+                        text = pytesseract.image_to_string(img)
+                        return text or ""
+                    except Exception:
+                        return ""
+
+                # Last resort: return empty string
                 return ""
+
         class _TCStub:
             def clean_text(self, text):
-                return text or ""
-        OCRService = _OCRStub
+                # Minimal cleaning: normalize whitespace
+                if not text:
+                    return ""
+                return ' '.join(text.split())
+
+        OCRService = _OCRFallback
         TextCleaner = _TCStub
 
     return OCRService, TextCleaner, LLMService
