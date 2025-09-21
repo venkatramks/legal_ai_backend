@@ -899,6 +899,44 @@ def debug_llm_test():
         logging.error(f"LLM test endpoint failed: {e}")
         return jsonify({'error': f'LLM test endpoint failed: {str(e)}'}), 500
 
+
+@app.route('/api/debug/env', methods=['GET'])
+def debug_env():
+    """Return non-sensitive environment diagnostics helpful for debugging deployments.
+
+    This intentionally avoids returning secret values. It reports presence/absence of
+    important env flags, the resolved upload folder path, whether it equals the
+    system temp dir, counts of files in the upload folder (capped), and whether
+    Supabase keys and Google API key appear to be configured.
+    """
+    try:
+        upload_folder = UPLOAD_FOLDER
+        is_temp = upload_folder == tempfile.gettempdir()
+        # List up to 20 files in upload folder for diagnostics (do not return file contents)
+        files = []
+        try:
+            entries = os.listdir(upload_folder)
+            for i, name in enumerate(entries[:20]):
+                files.append(name)
+        except Exception as e:
+            files = [f'failed_to_list: {str(e)}']
+
+        info = {
+            'upload_folder': upload_folder,
+            'upload_folder_is_tempdir': is_temp,
+            'upload_file_count_sample': len(files),
+            'upload_files_sample': files,
+            'vercel_flag': os.getenv('VERCEL') == '1',
+            'serverless_flag': os.getenv('SERVERLESS', '').lower() == 'true',
+            'supabase_configured': bool(os.getenv('SUPABASE_URL')) and (bool(os.getenv('SUPABASE_ANON_KEY')) or bool(os.getenv('SUPABASE_SERVICE_KEY'))),
+            'google_api_key_present': bool(os.getenv('GOOGLE_API_KEY')),
+            'allow_llm_test': os.getenv('ALLOW_LLM_TEST', '0') == '1',
+        }
+        return jsonify(info), 200
+    except Exception as e:
+        logging.error(f"Env debug failed: {e}")
+        return jsonify({'error': f'Env debug failed: {str(e)}'}), 500
+
 @app.route('/api/what-if-scenarios', methods=['POST'])
 def get_what_if_scenarios():
     """Get what-if scenarios for a clause"""
