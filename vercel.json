@@ -2,11 +2,11 @@
     "routes": [
         {
             "src": "./(.*)",
-            "dest": "backend/api/app.py"
+            "dest": "app.py"
         }
     ],
     "functions": {
-        "backend/api/app.py": {
+        "app.py": {
             "memory": 1024,
             "maxDuration": 30
         }
