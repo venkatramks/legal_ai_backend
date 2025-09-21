@@ -441,109 +441,99 @@ This {document_type} has been processed and cleaned for better readability. Whil
 
     def _get_mock_legal_references(self, document_type: str) -> list:
         """
-        Provide mock legal references based on document type.
-        """
-        base_references = []
-        
-        # Common references for all legal documents
-        base_references.extend([
-            {
-                "id": "ica_1872",
-                "title": "Indian Contract Act 1872",
-                "type": "act",
-                "authority": "Ministry of Law and Justice",
-                "section": "Section 10, 23",
-                "description": "Fundamental principles of contract formation and validity",
-                "relevance": "high",
-                "url": "https://legislative.gov.in/sites/default/files/A1872-09.pdf",
-                "lastUpdated": "1872"
-            },
-            {
-                "id": "cpa_2019",
-                "title": "Consumer Protection Act 2019",
-                "type": "act",
-                "authority": "Ministry of Consumer Affairs",
-                "section": "Section 2, 18",
-                "description": "Consumer rights and unfair trade practices",
-                "relevance": "medium",
-                "url": "https://consumeraffairs.nic.in/sites/default/files/CP%20Act%202019.pdf",
-                "lastUpdated": "2019"
-            }
-        ])
-        
-        # Document type specific references
-        if document_type.lower() in ['contract', 'agreement', 'service agreement']:
-            base_references.extend([
-                {
-                    "id": "companies_act_2013",
-                    "title": "Companies Act 2013",
-                    "type": "act",
-                    "authority": "Ministry of Corporate Affairs",
-                    "section": "Section 188, 197",
-                    "description": "Corporate contract regulations and related party transactions",
-                    "relevance": "medium",
-                    "url": "https://www.mca.gov.in/content/mca/global/en/acts-rules/acts/companies-act-2013.html",
-                    "lastUpdated": "2013"
-                }
-            ])
-            
-        elif document_type.lower() in ['lease agreement', 'rental agreement']:
-            base_references.extend([
-                {
-                    "id": "model_tenancy_act_2021",
-                    "title": "Model Tenancy Act 2021",
-                    "type": "act",
-                    "authority": "Ministry of Housing and Urban Affairs",
-                    "section": "Section 4, 7, 12",
-                    "description": "Comprehensive framework for rental agreements and tenant rights",
-                    "relevance": "high",
-                    "url": "https://mohua.gov.in/upload/uploadfiles/files/Model%20Tenancy%20Act.pdf",
-                    "lastUpdated": "2021"
-                }
-            ])
-            
-        elif document_type.lower() in ['employment agreement', 'employment contract']:
-            base_references.extend([
-                {
-                    "id": "labour_codes_2019",
-                    "title": "The Code on Wages 2019",
-                    "type": "act",
-                    "authority": "Ministry of Labour and Employment",
-                    "section": "Section 3, 5, 9",
-                    "description": "Wage payment, minimum wages, and employment terms",
-                    "relevance": "high",
-                    "url": "https://labour.gov.in/sites/default/files/SS_Code_on_Wages%2C2019.pdf",
-                    "lastUpdated": "2019"
-                }
-            ])
-            
-        elif document_type.lower() in ['privacy policy', 'data processing agreement']:
-            base_references.extend([
-                {
-                    "id": "dpdp_act_2023",
-                    "title": "Digital Personal Data Protection Act 2023",
-                    "type": "act",
-                    "authority": "Ministry of Electronics and IT",
-                    "section": "Section 6, 8, 11",
-                    "description": "Data protection, consent, and individual rights",
-                    "relevance": "high",
-                    "url": "https://www.meity.gov.in/writereaddata/files/Digital%20Personal%20Data%20Protection%20Act%202023.pdf",
-                    "lastUpdated": "2023"
-                },
-                {
-                    "id": "it_act_2000",
-                    "title": "Information Technology Act 2000",
-                    "type": "act",
-                    "authority": "Ministry of Electronics and IT",
-                    "section": "Section 43A, 72A",
-                    "description": "Data security and breach notification requirements",
-                    "relevance": "medium",
-                    "url": "https://www.meity.gov.in/content/information-technology-act-2000",
-                    "lastUpdated": "2008"
-                }
-            ])
+        Dynamic discovery of authoritative legal references. Instead of returning
+        a large hard-coded list, this helper attempts lightweight verification
+        of well-known authoritative URLs for the given document type and
+        returns only the resources that are reachable.
 
-        return base_references
+        If no authoritative resource can be confirmed, an empty list is returned
+        (safer than returning fabricated references).
+        """
+        candidates = {
+            'default': [
+                'https://legislative.gov.in',
+            ],
+            'contract': [
+                'https://legislative.gov.in/sites/default/files/A1872-09.pdf',
+                'https://www.mca.gov.in/content/mca/global/en/acts-rules/acts/companies-act-2013.html',
+            ],
+            'lease agreement': [
+                'https://mohua.gov.in/upload/uploadfiles/files/Model%20Tenancy%20Act.pdf',
+            ],
+            'employment agreement': [
+                'https://labour.gov.in/sites/default/files/SS_Code_on_Wages%2C2019.pdf',
+            ],
+            'privacy policy': [
+                'https://www.meity.gov.in/writereaddata/files/Digital%20Personal%20Data%20Protection%20Act%202023.pdf',
+                'https://www.meity.gov.in/content/information-technology-act-2000',
+            ]
+        }
+
+        key = (document_type or '').lower()
+        urls = []
+        # assemble fallback candidates
+        urls.extend(candidates.get('default', []))
+        # try exact match, then prefix matches
+        if key in candidates:
+            urls.extend(candidates[key])
+        else:
+            for k, v in candidates.items():
+                if k != 'default' and k in key:
+                    urls.extend(v)
+
+        verified = []
+        seen = set()
+        for url in urls:
+            if url in seen:
+                continue
+            seen.add(url)
+            try:
+                # Use a HEAD request first to avoid downloading large PDFs
+                h = requests.head(url, timeout=6, allow_redirects=True)
+                if h.status_code >= 200 and h.status_code < 400:
+                    title = None
+                    last_updated = None
+                    # prefer Last-Modified header if present
+                    if 'Last-Modified' in h.headers:
+                        last_updated = h.headers.get('Last-Modified')
+                    # If content-type is HTML, try to fetch small portion to extract title
+                    ctype = h.headers.get('Content-Type', '')
+                    if 'text/html' in ctype:
+                        try:
+                            r = requests.get(url, timeout=6)
+                            txt = r.text
+                            # crude title extraction
+                            import re
+                            m = re.search(r'<title>(.*?)</title>', txt, re.IGNORECASE | re.DOTALL)
+                            if m:
+                                title = m.group(1).strip()
+                        except Exception:
+                            title = None
+                    # If still no title, infer from URL path
+                    if not title:
+                        title = url.rstrip('/').split('/')[-1] or url
+
+                    entry = {
+                        'id': url.split('/')[-1].split('?')[0],
+                        'title': title,
+                        'type': 'act' if 'act' in url.lower() or 'legislative' in url.lower() else 'resource',
+                        'authority': None,
+                        'section': None,
+                        'description': None,
+                        'relevance': 'high',
+                        'url': url,
+                        'lastUpdated': last_updated,
+                    }
+                    verified.append(entry)
+                else:
+                    # not accessible
+                    continue
+            except Exception:
+                # network or DNS error; skip
+                continue
+
+        # Return verified authoritative resources only; if none, return empty list
+        return verified
 
     def get_what_if_scenarios(self, clause_text: str, document_type: str, clause_type: str = "") -> list:
         """
