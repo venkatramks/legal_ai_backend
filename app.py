@@ -775,6 +775,7 @@ def internal_error(e):
 
 if __name__ == '__main__':
     print("🚀 Starting Legal Document AI Backend...")
-    print("📍 API available at: http://localhost:5000")
-    print("📋 Health check: http://localhost:5000/api/health")
+    # Running in production — print deployed URLs instead of localhost for clarity
+    print("📍 API available at: https://legal-ai-backend-chi.vercel.app")
+    print("📋 Health check: https://legal-ai-backend-chi.vercel.app/api/health")
     app.run(debug=True, host='0.0.0.0', port=5000)
