@@ -144,7 +144,39 @@ def upload_file():
         
         # Save the file
         file.save(filepath)
-        
+
+        # If running in a serverless environment (Vercel), local filesystem is ephemeral
+        # and subsequent requests may not see this file. To avoid 404s when the client
+        # calls /api/process/<file_id>, process synchronously here and return the result.
+        serverless_env = os.getenv('VERCEL') == '1' or os.getenv('SERVERLESS', '').lower() == 'true'
+        if serverless_env:
+            try:
+                # Lazy-import services and process immediately
+                OCRServiceCls, TextCleanerCls, LLMServiceCls = import_services()
+                ocr_service = OCRServiceCls()
+                text_cleaner = TextCleanerCls()
+                llm_service = LLMServiceCls()
+
+                result, from_cache, document_id = process_and_cache_document(filepath, ocr_service, text_cleaner, llm_service)
+
+                return jsonify({
+                    'message': 'File uploaded and processed (serverless sync)',
+                    'file_id': unique_filename,
+                    'filename': filename,
+                    'result': result,
+                    'cached': from_cache,
+                    'document_id': document_id
+                }), 200
+            except Exception as e:
+                # Processing failed, but upload succeeded — return upload result and error
+                logging.error(f"Synchronous processing failed on upload: {e}")
+                return jsonify({
+                    'message': 'File uploaded but processing failed',
+                    'file_id': unique_filename,
+                    'filename': filename,
+                    'error': str(e)
+                }), 202
+
         return jsonify({
             'message': 'File uploaded successfully',
             'file_id': unique_filename,
