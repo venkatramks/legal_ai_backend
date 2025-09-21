@@ -4,13 +4,21 @@ from typing import Optional, Dict, Any
 import logging
 from cachetools import TTLCache
 _HAS_GENAI = False
+genai = None  # type: ignore
 try:
-    # Import lazily compatible package name if available
-    from google import genai  # type: ignore
+    # Try the canonical packaged import first
+    from google import genai as _genai  # type: ignore
+    genai = _genai
     _HAS_GENAI = True
 except Exception:
-    # GenAI client not installed in this environment; methods will fall back or raise as needed
-    genai = None  # type: ignore
+    try:
+        # Older / alternate packaging may expose genai at top-level
+        import genai as _genai  # type: ignore
+        genai = _genai
+        _HAS_GENAI = True
+    except Exception:
+        # GenAI client not installed in this environment; fallbacks will be used
+        genai = None  # type: ignore
 
 class LLMService:
     def __init__(self, api_key: Optional[str] = None):
@@ -286,14 +294,14 @@ This {document_type} has been processed and cleaned for better readability. Whil
 
             full_prompt = system + "\n\n" + user_content
 
-            client = genai.Client(api_key=self.api_key)
-            # Try a stable chat/response model; fall back if necessary
+            # Use helper to create a client and generate content in a resilient way
             try:
-                resp = client.models.generate_content(model="gemini-2.5", contents=full_prompt)
-            except Exception:
-                resp = client.models.generate_content(model="gemini-2.5-flash", contents=full_prompt)
+                resp_text = self._generate_content_via_genai(full_prompt)
+            except Exception as e:
+                logging.error(f"GenAI generation failed: {e}")
+                resp_text = None
 
-            answer = (resp.text or '').strip()
+            answer = (resp_text or '').strip()
 
             # If the model returns an empty or unhelpful answer, return a clear fallback
             if not answer:
@@ -303,6 +311,84 @@ This {document_type} has been processed and cleaned for better readability. Whil
         except Exception as e:
             logging.error(f"Error answering user query via GenAI: {e}")
             return "I'm sorry — I couldn't process that question right now. Please try again or ask a more specific question."
+
+    # ---- GenAI client helpers ----
+    def _create_genai_client(self):
+        """Create and return a GenAI client in a resilient way.
+
+        Tries common construction patterns used across SDK versions.
+        Returns the client instance or raises if not possible.
+        """
+        if not _HAS_GENAI or genai is None:
+            raise RuntimeError("GenAI client not available")
+
+        # Some SDK versions use genai.Client(api_key=...)
+        try:
+            return genai.Client(api_key=self.api_key)
+        except Exception:
+            pass
+
+        # Other SDKs may provide a connect / from_api_key factory
+        try:
+            if hasattr(genai, 'Client'):
+                client_cls = getattr(genai, 'Client')
+                return client_cls(api_key=self.api_key)
+        except Exception:
+            pass
+
+        # Last-ditch: return genai if it exposes a top-level convenience client
+        if hasattr(genai, 'client'):
+            return getattr(genai, 'client')
+
+        raise RuntimeError("Unable to construct GenAI client with available SDK")
+
+    def _generate_content_via_genai(self, prompt: str, models: Optional[list] = None, max_retries: int = 2) -> Optional[str]:
+        """Attempt to generate content using GenAI, trying a few model names and client call styles.
+
+        Returns response text or None on failure.
+        """
+        if models is None:
+            models = ["gemini-2.5", "gemini-2.5-flash", "gemini-1.0"]
+
+        client = self._create_genai_client()
+
+        last_exc = None
+        for model in models:
+            try:
+                # Preferred style: client.models.generate_content(...)
+                if hasattr(client, 'models') and hasattr(client.models, 'generate_content'):
+                    resp = client.models.generate_content(model=model, contents=prompt)
+                    # Many SDK versions attach text on .text
+                    if hasattr(resp, 'text'):
+                        return resp.text
+                    # Or return a dict-like object
+                    if isinstance(resp, dict) and 'text' in resp:
+                        return resp['text']
+
+                # Alternate style: client.generate(...) or client.generate_content(...)
+                if hasattr(client, 'generate'):
+                    resp = client.generate(model=model, prompt=prompt)
+                    if isinstance(resp, dict) and 'text' in resp:
+                        return resp['text']
+                    if hasattr(resp, 'text'):
+                        return resp.text
+
+                if hasattr(client, 'generate_content'):
+                    resp = client.generate_content(model=model, contents=prompt)
+                    if hasattr(resp, 'text'):
+                        return resp.text
+                    if isinstance(resp, dict) and 'text' in resp:
+                        return resp['text']
+
+            except Exception as e:
+                last_exc = e
+                logging.debug(f"Model {model} failed with: {e}")
+                continue
+
+        # If all attempts fail, raise the last exception for callers to handle
+        if last_exc:
+            raise last_exc
+        return None
 
     # ----- Clause extraction helpers -----
     def extract_clauses(self, document_text: str):
