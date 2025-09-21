@@ -94,11 +94,26 @@ else:
 
 # Configuration
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
-UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg'}
 
-# Create upload directory if it doesn't exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# Determine an upload folder that is writable in serverless environments.
+# Use an explicit UPLOAD_FOLDER env var if present, otherwise prefer the system
+# temporary directory when running on Vercel/serverless (writable) and fall
+# back to a project-local 'uploads/' directory for local development.
+DEFAULT_UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+if os.getenv('VERCEL') == '1' or os.getenv('SERVERLESS', '').lower() == 'true':
+    UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or tempfile.gettempdir()
+else:
+    UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or DEFAULT_UPLOAD_DIR
+
+# Only create the uploads directory when it's not the system temp dir (which
+# already exists and is writable). This avoids attempting to create directories
+# in read-only deployments.
+try:
+    if UPLOAD_FOLDER != tempfile.gettempdir():
+        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+except Exception as e:
+    logging.warning(f"Could not create upload directory {UPLOAD_FOLDER}: {e}")
 
 def allowed_file(filename):
     return '.' in filename and \
