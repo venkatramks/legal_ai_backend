@@ -439,9 +439,110 @@ This {document_type} has been processed and cleaned for better readability. Whil
             return self._get_mock_legal_references(document_type)
 
     def _get_mock_legal_references(self, document_type: str) -> list:
-        # Avoid hardcoded mock references. Prefer returning an empty list so callers
-        # rely on generated LLM results or explicit persisted references.
-        return []
+        """
+        Provide mock legal references based on document type.
+        """
+        base_references = []
+        
+        # Common references for all legal documents
+        base_references.extend([
+            {
+                "id": "ica_1872",
+                "title": "Indian Contract Act 1872",
+                "type": "act",
+                "authority": "Ministry of Law and Justice",
+                "section": "Section 10, 23",
+                "description": "Fundamental principles of contract formation and validity",
+                "relevance": "high",
+                "url": "https://legislative.gov.in/sites/default/files/A1872-09.pdf",
+                "lastUpdated": "1872"
+            },
+            {
+                "id": "cpa_2019",
+                "title": "Consumer Protection Act 2019",
+                "type": "act",
+                "authority": "Ministry of Consumer Affairs",
+                "section": "Section 2, 18",
+                "description": "Consumer rights and unfair trade practices",
+                "relevance": "medium",
+                "url": "https://consumeraffairs.nic.in/sites/default/files/CP%20Act%202019.pdf",
+                "lastUpdated": "2019"
+            }
+        ])
+        
+        # Document type specific references
+        if document_type.lower() in ['contract', 'agreement', 'service agreement']:
+            base_references.extend([
+                {
+                    "id": "companies_act_2013",
+                    "title": "Companies Act 2013",
+                    "type": "act",
+                    "authority": "Ministry of Corporate Affairs",
+                    "section": "Section 188, 197",
+                    "description": "Corporate contract regulations and related party transactions",
+                    "relevance": "medium",
+                    "url": "https://www.mca.gov.in/content/mca/global/en/acts-rules/acts/companies-act-2013.html",
+                    "lastUpdated": "2013"
+                }
+            ])
+            
+        elif document_type.lower() in ['lease agreement', 'rental agreement']:
+            base_references.extend([
+                {
+                    "id": "model_tenancy_act_2021",
+                    "title": "Model Tenancy Act 2021",
+                    "type": "act",
+                    "authority": "Ministry of Housing and Urban Affairs",
+                    "section": "Section 4, 7, 12",
+                    "description": "Comprehensive framework for rental agreements and tenant rights",
+                    "relevance": "high",
+                    "url": "https://mohua.gov.in/upload/uploadfiles/files/Model%20Tenancy%20Act.pdf",
+                    "lastUpdated": "2021"
+                }
+            ])
+            
+        elif document_type.lower() in ['employment agreement', 'employment contract']:
+            base_references.extend([
+                {
+                    "id": "labour_codes_2019",
+                    "title": "The Code on Wages 2019",
+                    "type": "act",
+                    "authority": "Ministry of Labour and Employment",
+                    "section": "Section 3, 5, 9",
+                    "description": "Wage payment, minimum wages, and employment terms",
+                    "relevance": "high",
+                    "url": "https://labour.gov.in/sites/default/files/SS_Code_on_Wages%2C2019.pdf",
+                    "lastUpdated": "2019"
+                }
+            ])
+            
+        elif document_type.lower() in ['privacy policy', 'data processing agreement']:
+            base_references.extend([
+                {
+                    "id": "dpdp_act_2023",
+                    "title": "Digital Personal Data Protection Act 2023",
+                    "type": "act",
+                    "authority": "Ministry of Electronics and IT",
+                    "section": "Section 6, 8, 11",
+                    "description": "Data protection, consent, and individual rights",
+                    "relevance": "high",
+                    "url": "https://www.meity.gov.in/writereaddata/files/Digital%20Personal%20Data%20Protection%20Act%202023.pdf",
+                    "lastUpdated": "2023"
+                },
+                {
+                    "id": "it_act_2000",
+                    "title": "Information Technology Act 2000",
+                    "type": "act",
+                    "authority": "Ministry of Electronics and IT",
+                    "section": "Section 43A, 72A",
+                    "description": "Data security and breach notification requirements",
+                    "relevance": "medium",
+                    "url": "https://www.meity.gov.in/content/information-technology-act-2000",
+                    "lastUpdated": "2008"
+                }
+            ])
+
+        return base_references
 
     def get_what_if_scenarios(self, clause_text: str, document_type: str, clause_type: str = "") -> list:
         """
@@ -523,5 +624,153 @@ This {document_type} has been processed and cleaned for better readability. Whil
             return self._get_mock_scenarios(document_type, clause_type)
 
     def _get_mock_scenarios(self, document_type: str, clause_type: str = "") -> list:
-        # Avoid hardcoded mock scenarios. Return empty so callers rely on LLM-generated output.
-        return []
+        """
+        Provide mock what-if scenarios based on document type and clause risk level.
+        """
+        scenarios = []
+        
+        # Common breach scenario for all documents
+        scenarios.append({
+            "id": "clause_breach",
+            "title": "Clause Violation Scenario",
+            "description": "Analysis of consequences if this clause is breached or not fulfilled",
+            "likelihood": "medium",
+            "impact": "high" if clause_type == "high" else "medium",
+            "category": "breach",
+            "outcomes": [
+                "Legal action may be initiated by the non-breaching party",
+                "Contractual penalties or damages may be enforced",
+                "Business relationship may be damaged or terminated"
+            ],
+            "mitigation": [
+                "Implement monitoring and compliance systems",
+                "Regular communication and progress reviews",
+                "Consider adding grace periods for minor breaches"
+            ]
+        })
+        
+        # Document-specific scenarios
+        if document_type.lower() in ['contract', 'agreement']:
+            scenarios.extend([
+                {
+                    "id": "payment_default",
+                    "title": "Payment Default Scenario",
+                    "description": "Financial implications of delayed or missed payments",
+                    "likelihood": "medium",
+                    "impact": "medium",
+                    "category": "financial",
+                    "outcomes": [
+                        "Interest charges and late fees may accumulate",
+                        "Credit rating impact for the defaulting party",
+                        "Suspension of services until payment is received"
+                    ],
+                    "mitigation": [
+                        "Establish clear payment terms and schedules",
+                        "Require security deposits or guarantees",
+                        "Implement automated payment reminders"
+                    ]
+                },
+                {
+                    "id": "scope_expansion",
+                    "title": "Scope Creep Scenario",
+                    "description": "Challenges when project requirements expand beyond original agreement",
+                    "likelihood": "high",
+                    "impact": "medium",
+                    "category": "operational",
+                    "outcomes": [
+                        "Budget overruns and resource strain",
+                        "Timeline delays and missed deadlines",
+                        "Disputes over additional compensation"
+                    ],
+                    "mitigation": [
+                        "Define clear change management procedures",
+                        "Require written approval for scope changes",
+                        "Establish rates for additional work upfront"
+                    ]
+                }
+            ])
+            
+        elif document_type.lower() in ['lease agreement', 'rental agreement']:
+            scenarios.extend([
+                {
+                    "id": "property_damage",
+                    "title": "Property Damage Scenario",
+                    "description": "Liability and consequences of property damage during tenancy",
+                    "likelihood": "low",
+                    "impact": "high",
+                    "category": "legal",
+                    "outcomes": [
+                        "Tenant liability for repair and restoration costs",
+                        "Potential forfeiture of security deposit",
+                        "Insurance claims and premium adjustments"
+                    ],
+                    "mitigation": [
+                        "Require comprehensive tenant insurance coverage",
+                        "Conduct regular property inspections",
+                        "Define clear distinction between wear and damage"
+                    ],
+                    "precedent": "Model Tenancy Act 2021, Section 7"
+                },
+                {
+                    "id": "early_termination",
+                    "title": "Early Termination Scenario", 
+                    "description": "Financial and legal consequences of breaking lease early",
+                    "likelihood": "medium",
+                    "impact": "medium",
+                    "category": "financial",
+                    "outcomes": [
+                        "Early termination penalties as per lease terms",
+                        "Loss of security deposit and advance rent",
+                        "Difficulty in obtaining future rental references"
+                    ],
+                    "mitigation": [
+                        "Include reasonable termination clauses",
+                        "Allow for subletting with landlord approval",
+                        "Consider graduated penalty structures"
+                    ]
+                }
+            ])
+            
+        elif 'employment' in document_type.lower():
+            scenarios.append({
+                "id": "termination_dispute",
+                "title": "Wrongful Termination Scenario",
+                "description": "Legal and financial implications of disputed employment termination",
+                "likelihood": "medium",
+                "impact": "high",
+                "category": "legal",
+                "outcomes": [
+                    "Labor court proceedings and associated legal costs",
+                    "Potential compensation for wrongful dismissal",
+                    "Reputational damage and regulatory scrutiny"
+                ],
+                "mitigation": [
+                    "Follow proper disciplinary and termination procedures",
+                    "Maintain detailed documentation of performance issues",
+                    "Provide adequate notice period or compensation in lieu"
+                ],
+                "precedent": "Industrial Disputes Act 1947, Section 25F"
+            })
+            
+        elif document_type.lower() in ['privacy policy', 'data processing agreement']:
+            scenarios.append({
+                "id": "data_breach",
+                "title": "Data Breach Scenario",
+                "description": "Regulatory and financial consequences of personal data compromise",
+                "likelihood": "low",
+                "impact": "high",
+                "category": "compliance",
+                "outcomes": [
+                    "Regulatory penalties under DPDP Act 2023",
+                    "Mandatory breach notification to authorities and individuals",
+                    "Class action lawsuits and compensation claims"
+                ],
+                "mitigation": [
+                    "Implement robust cybersecurity frameworks",
+                    "Regular security audits and vulnerability assessments",
+                    "Comprehensive incident response and recovery plans"
+                ],
+                "precedent": "Digital Personal Data Protection Act 2023, Section 33"
+            })
+
+        return scenarios
