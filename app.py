@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 import tempfile
 import uuid
+import logging
 from werkzeug.utils import secure_filename
 import json
 from dotenv import load_dotenv
@@ -265,9 +266,27 @@ def process_document(file_id):
                         os.remove(processing_marker)
                 except Exception as e:
                     logging.warning(f"Failed to remove processing marker {processing_marker}: {e}")
-
-        thread = threading.Thread(target=_bg_process, daemon=True)
-        thread.start()
+        
+        # In serverless environments (like Vercel), background threads and local disk
+        # persistence are unreliable. Detect common serverless env vars and run
+        # processing synchronously in that case so the request lifecycle completes
+        # only after processing finishes (or you can adapt to enqueue a job).
+        serverless_env = os.getenv('VERCEL') == '1' or os.getenv('SERVERLESS', '').lower() == 'true'
+        if serverless_env:
+            try:
+                result, from_cache, document_id = process_and_cache_document(filepath, ocr_service, text_cleaner, llm_service)
+                logging.info(f"(sync) Processing completed for {filepath}, cached: {from_cache}, document_id: {document_id}")
+            except Exception as e:
+                logging.error(f"(sync) Processing failed for {filepath}: {e}")
+            finally:
+                try:
+                    if os.path.exists(processing_marker):
+                        os.remove(processing_marker)
+                except Exception as e:
+                    logging.warning(f"Failed to remove processing marker {processing_marker}: {e}")
+        else:
+            thread = threading.Thread(target=_bg_process, daemon=True)
+            thread.start()
 
         return jsonify({'status': 'started', 'message': 'Processing has started in background'}), 202
 
