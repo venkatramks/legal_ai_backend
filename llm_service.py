@@ -612,152 +612,69 @@ This {document_type} has been processed and cleaned for better readability. Whil
 
     def _get_mock_scenarios(self, document_type: str, clause_type: str = "") -> list:
         """
-        Provide mock what-if scenarios based on document type and clause risk level.
+        Dynamic generation of what-if scenario skeletons referencing authoritative resources.
+
+        Instead of returning a large static set, we verify a small set of authoritative
+        resources for the `document_type` and return scenario skeletons that reference
+        those verified URLs. If no authoritative resources are reachable, return an
+        empty list.
         """
-        scenarios = []
-        
-        # Common breach scenario for all documents
-        scenarios.append({
-            "id": "clause_breach",
-            "title": "Clause Violation Scenario",
-            "description": "Analysis of consequences if this clause is breached or not fulfilled",
-            "likelihood": "medium",
-            "impact": "high" if clause_type == "high" else "medium",
-            "category": "breach",
-            "outcomes": [
-                "Legal action may be initiated by the non-breaching party",
-                "Contractual penalties or damages may be enforced",
-                "Business relationship may be damaged or terminated"
+        # Candidate resources mapping (small curated list)
+        candidates = {
+            'contract': [
+                'https://legislative.gov.in/sites/default/files/A1872-09.pdf',
             ],
-            "mitigation": [
-                "Implement monitoring and compliance systems",
-                "Regular communication and progress reviews",
-                "Consider adding grace periods for minor breaches"
+            'lease agreement': [
+                'https://mohua.gov.in/upload/uploadfiles/files/Model%20Tenancy%20Act.pdf',
+            ],
+            'employment agreement': [
+                'https://labour.gov.in/sites/default/files/SS_Code_on_Wages%2C2019.pdf',
+            ],
+            'privacy policy': [
+                'https://www.meity.gov.in/writereaddata/files/Digital%20Personal%20Data%20Protection%20Act%202023.pdf',
             ]
-        })
-        
-        # Document-specific scenarios
-        if document_type.lower() in ['contract', 'agreement']:
-            scenarios.extend([
-                {
-                    "id": "payment_default",
-                    "title": "Payment Default Scenario",
-                    "description": "Financial implications of delayed or missed payments",
-                    "likelihood": "medium",
-                    "impact": "medium",
-                    "category": "financial",
-                    "outcomes": [
-                        "Interest charges and late fees may accumulate",
-                        "Credit rating impact for the defaulting party",
-                        "Suspension of services until payment is received"
-                    ],
-                    "mitigation": [
-                        "Establish clear payment terms and schedules",
-                        "Require security deposits or guarantees",
-                        "Implement automated payment reminders"
-                    ]
-                },
-                {
-                    "id": "scope_expansion",
-                    "title": "Scope Creep Scenario",
-                    "description": "Challenges when project requirements expand beyond original agreement",
-                    "likelihood": "high",
-                    "impact": "medium",
-                    "category": "operational",
-                    "outcomes": [
-                        "Budget overruns and resource strain",
-                        "Timeline delays and missed deadlines",
-                        "Disputes over additional compensation"
-                    ],
-                    "mitigation": [
-                        "Define clear change management procedures",
-                        "Require written approval for scope changes",
-                        "Establish rates for additional work upfront"
-                    ]
-                }
-            ])
-            
-        elif document_type.lower() in ['lease agreement', 'rental agreement']:
-            scenarios.extend([
-                {
-                    "id": "property_damage",
-                    "title": "Property Damage Scenario",
-                    "description": "Liability and consequences of property damage during tenancy",
-                    "likelihood": "low",
-                    "impact": "high",
-                    "category": "legal",
-                    "outcomes": [
-                        "Tenant liability for repair and restoration costs",
-                        "Potential forfeiture of security deposit",
-                        "Insurance claims and premium adjustments"
-                    ],
-                    "mitigation": [
-                        "Require comprehensive tenant insurance coverage",
-                        "Conduct regular property inspections",
-                        "Define clear distinction between wear and damage"
-                    ],
-                    "precedent": "Model Tenancy Act 2021, Section 7"
-                },
-                {
-                    "id": "early_termination",
-                    "title": "Early Termination Scenario", 
-                    "description": "Financial and legal consequences of breaking lease early",
-                    "likelihood": "medium",
-                    "impact": "medium",
-                    "category": "financial",
-                    "outcomes": [
-                        "Early termination penalties as per lease terms",
-                        "Loss of security deposit and advance rent",
-                        "Difficulty in obtaining future rental references"
-                    ],
-                    "mitigation": [
-                        "Include reasonable termination clauses",
-                        "Allow for subletting with landlord approval",
-                        "Consider graduated penalty structures"
-                    ]
-                }
-            ])
-            
-        elif 'employment' in document_type.lower():
+        }
+
+        key = (document_type or '').lower()
+        urls = []
+        for k, v in candidates.items():
+            if k in key:
+                urls.extend(v)
+
+        verified = []
+        for url in urls:
+            try:
+                h = requests.head(url, timeout=6, allow_redirects=True)
+                if h.status_code >= 200 and h.status_code < 400:
+                    verified.append(url)
+            except Exception:
+                continue
+
+        scenarios = []
+        # Build small safe skeletons referencing verified sources
+        for i, source in enumerate(verified):
             scenarios.append({
-                "id": "termination_dispute",
-                "title": "Wrongful Termination Scenario",
-                "description": "Legal and financial implications of disputed employment termination",
-                "likelihood": "medium",
-                "impact": "high",
-                "category": "legal",
-                "outcomes": [
-                    "Labor court proceedings and associated legal costs",
-                    "Potential compensation for wrongful dismissal",
-                    "Reputational damage and regulatory scrutiny"
-                ],
-                "mitigation": [
-                    "Follow proper disciplinary and termination procedures",
-                    "Maintain detailed documentation of performance issues",
-                    "Provide adequate notice period or compensation in lieu"
-                ],
-                "precedent": "Industrial Disputes Act 1947, Section 25F"
-            })
-            
-        elif document_type.lower() in ['privacy policy', 'data processing agreement']:
-            scenarios.append({
-                "id": "data_breach",
-                "title": "Data Breach Scenario",
-                "description": "Regulatory and financial consequences of personal data compromise",
-                "likelihood": "low",
-                "impact": "high",
-                "category": "compliance",
-                "outcomes": [
-                    "Regulatory penalties under DPDP Act 2023",
-                    "Mandatory breach notification to authorities and individuals",
-                    "Class action lawsuits and compensation claims"
-                ],
-                "mitigation": [
-                    "Implement robust cybersecurity frameworks",
-                    "Regular security audits and vulnerability assessments",
-                    "Comprehensive incident response and recovery plans"
-                ],
-                "precedent": "Digital Personal Data Protection Act 2023, Section 33"
+                'id': f'src_{i+1}',
+                'title': f'Scenario set derived from {source.split("//")[-1] }',
+                'source': source,
+                'scenarios': [
+                    {
+                        'title': 'Clause Violation',
+                        'description': 'What may happen if the clause is violated',
+                        'likelihood': 'medium',
+                        'impact': 'high' if clause_type == 'high' else 'medium',
+                        'mitigation': ['Review the clause', 'Document evidence', 'Seek legal advice'],
+                        'references': [source]
+                    },
+                    {
+                        'title': 'Compliance Risk',
+                        'description': 'Potential regulatory/compliance issues that could arise',
+                        'likelihood': 'low',
+                        'impact': 'high',
+                        'mitigation': ['Ensure regulatory checks', 'Implement controls'],
+                        'references': [source]
+                    }
+                ]
             })
 
         return scenarios
