@@ -185,10 +185,15 @@ def upload_file():
         # Save the file
         file.save(filepath)
 
-        # If running in a serverless environment (Vercel), local filesystem is ephemeral
-        # and subsequent requests may not see this file. To avoid 404s when the client
-        # calls /api/process/<file_id>, process synchronously here and return the result.
-        serverless_env = os.getenv('VERCEL') == '1' or os.getenv('SERVERLESS', '').lower() == 'true'
+        # If running in a serverless environment (Vercel) or the upload folder is
+        # the system temp dir (ephemeral), local filesystem may not persist across
+        # requests. To avoid 404s when the client calls /api/process/<file_id>,
+        # process synchronously here and return the result.
+        serverless_env = (
+            os.getenv('VERCEL') == '1' or
+            os.getenv('SERVERLESS', '').lower() == 'true' or
+            UPLOAD_FOLDER == tempfile.gettempdir()
+        )
         if serverless_env:
             try:
                 # Lazy-import services and process immediately
@@ -439,11 +444,22 @@ def process_document(file_id):
 def process_status(file_id):
     try:
         filepath = os.path.join(UPLOAD_FOLDER, file_id)
-        if not os.path.exists(filepath):
-            return jsonify({'error': 'File not found'}), 404
-
         result_path = filepath + '.processed.json'
         processing_marker = filepath + '.processing'
+
+        # If a processed cached result exists, return it even if the original
+        # uploaded file is no longer present (common on serverless hosts).
+        if os.path.exists(result_path):
+            try:
+                with open(result_path, 'r', encoding='utf-8') as f:
+                    cached = json.load(f)
+                return jsonify({'status': 'done', 'cached': True, 'result': cached}), 200
+            except Exception as e:
+                logging.warning(f"Failed to read cached result {result_path}: {e}")
+                return jsonify({'status': 'error', 'message': 'Failed to read cached result'}), 500
+
+        if not os.path.exists(filepath):
+            return jsonify({'error': 'File not found'}), 404
 
         # Check Supabase first if available (use anon key for read if present)
         if SUPABASE_AVAILABLE:
