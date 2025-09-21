@@ -82,7 +82,15 @@ except Exception as e:
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+# Restrict CORS to a frontend origin if provided via FRONTEND_URL environment variable.
+# If FRONTEND_URL is not set, keep CORS permissive for development convenience.
+frontend_origin = os.getenv('https://legal-ai-frontend-two.vercel.app/')
+if frontend_origin:
+    # Only allow API routes from the configured frontend origin
+    CORS(app, resources={r"/api/*": {"origins": frontend_origin}})
+    logging.info(f"CORS restricted to frontend origin: {frontend_origin}")
+else:
+    CORS(app)
 
 # Configuration
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
