@@ -555,29 +555,48 @@ This {document_type} has been processed and cleaned for better readability. Whil
 
         Returns a list of {'id': str, 'text': str} or raises on failure.
         """
-        # If GenAI client isn't available, raise so callers can fallback to heuristics
-        if not _HAS_GENAI or genai is None:
+        # Try SDK first; if unavailable, try REST fallback; otherwise raise to let caller use heuristics
+        prompt = f"Extract the most important clauses from the following document. Return a JSON array of objects with 'id' and 'text' fields. Limit to the top 12 clauses. Document:\n\n{document_text[:8000]}"
+        json_text = None
+        # SDK attempt
+        if _HAS_GENAI and genai is not None:
+            try:
+                client = genai.Client(api_key=self.api_key)
+                response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+                txt = (response.text or '').strip()
+                start = txt.find('[')
+                if start != -1:
+                    txt = txt[start:]
+                json_text = txt
+            except Exception as e:
+                logging.debug(f"SDK clause extraction failed: {e}")
+
+        # REST fallback
+        if not json_text and self.api_key:
+            try:
+                resp = self._generate_content_via_genai(prompt, models=["gemini-2.5-flash", "gemini-2.5", "text-bison-001"])
+                if resp:
+                    txt = resp.strip()
+                    start = txt.find('[')
+                    if start != -1:
+                        txt = txt[start:]
+                    json_text = txt
+            except Exception as e:
+                logging.debug(f"REST clause extraction failed: {e}")
+
+        if not json_text:
             raise RuntimeError("LLM client not available for clause extraction")
 
         try:
-            prompt = f"Extract the most important clauses from the following document. Return a JSON array of objects with 'id' and 'text' fields. Limit to the top 12 clauses. Document:\n\n{document_text[:8000]}"
-            client = genai.Client(api_key=self.api_key)
-            response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-            # Try to parse a JSON array from response.text
             import json
-            txt = response.text.strip()
-            # Some models may return markdown; attempt to find the first JSON marker
-            start = txt.find('[')
-            if start != -1:
-                txt = txt[start:]
-            data = json.loads(txt)
+            data = json.loads(json_text)
             clauses = []
             for i, item in enumerate(data):
                 if isinstance(item, dict) and 'text' in item:
                     clauses.append({'id': item.get('id') or f'c{i+1}', 'text': item['text']})
             return clauses
-        except Exception:
-            # Re-raise to allow the caller to fall back
+        except Exception as e:
+            logging.debug(f"Parsing clause JSON failed: {e}")
             raise
 
     def score_clauses(self, clauses):
@@ -585,21 +604,43 @@ This {document_type} has been processed and cleaned for better readability. Whil
 
         Expects clauses as [{'id':..., 'text':...}]. Returns [{'id','clause_text','risk','highlights'}]
         """
-        if not _HAS_GENAI or genai is None:
+        # Try SDK then REST fallback. If neither available, raise so caller can fallback.
+        import json
+        items = [{'id': c['id'], 'text': c['text'][:2000]} for c in clauses]
+        prompt = f"For each clause in the following JSON array, assign a risk level: low, medium, or high. Return JSON array of objects with id, clause_text, risk, highlights (array of strings).\n\n{json.dumps(items)}"
+
+        json_text = None
+        if _HAS_GENAI and genai is not None:
+            try:
+                client = genai.Client(api_key=self.api_key)
+                response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+                txt = (response.text or '').strip()
+                start = txt.find('[')
+                if start != -1:
+                    txt = txt[start:]
+                json_text = txt
+            except Exception as e:
+                logging.debug(f"SDK clause scoring failed: {e}")
+
+        if not json_text and self.api_key:
+            try:
+                resp = self._generate_content_via_genai(prompt, models=["gemini-2.5-flash", "gemini-2.5", "text-bison-001"])
+                if resp:
+                    txt = resp.strip()
+                    start = txt.find('[')
+                    if start != -1:
+                        txt = txt[start:]
+                    json_text = txt
+            except Exception as e:
+                logging.debug(f"REST clause scoring failed: {e}")
+
+        if not json_text:
             raise RuntimeError("LLM client not available for clause scoring")
 
         try:
-            import json
-            items = [{'id': c['id'], 'text': c['text'][:2000]} for c in clauses]
-            prompt = f"For each clause in the following JSON array, assign a risk level: low, medium, or high. Return JSON array of objects with id, clause_text, risk, highlights (array of strings).\n\n{json.dumps(items)}"
-            client = genai.Client(api_key=self.api_key)
-            response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-            txt = response.text.strip()
-            start = txt.find('[')
-            if start != -1:
-                txt = txt[start:]
-            return json.loads(txt)
-        except Exception:
+            return json.loads(json_text)
+        except Exception as e:
+            logging.debug(f"Parsing clause scoring JSON failed: {e}")
             raise
 
     def get_legal_references(self, clause_text: str, document_type: str, clause_type: str = "") -> list:
@@ -617,70 +658,45 @@ This {document_type} has been processed and cleaned for better readability. Whil
         if not self.is_available():
             return self._get_mock_legal_references(document_type)
 
-        if not _HAS_GENAI or genai is None:
-            logging.warning("GenAI client not available; returning mock legal references")
+        prompt = f"Analyze the following clause from a {document_type} document and identify relevant Indian laws, regulations, and legal references.\n\nClause Text: \"{clause_text}\"\nDocument Type: {document_type}\nClause Type: {clause_type}\n\nReturn a JSON array of references with fields id,title,type,authority,section,description,relevance,url,lastUpdated. Return only the JSON array."
+
+        json_text = None
+        # SDK attempt
+        if _HAS_GENAI and genai is not None:
+            try:
+                client = genai.Client(api_key=self.api_key)
+                response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+                response_text = (response.text or '').strip()
+                start_idx = response_text.find('[')
+                end_idx = response_text.rfind(']')
+                if start_idx != -1 and end_idx != -1:
+                    json_text = response_text[start_idx:end_idx+1]
+            except Exception as e:
+                logging.debug(f"SDK legal references failed: {e}")
+
+        # REST fallback
+        if not json_text and self.api_key:
+            try:
+                resp = self._generate_content_via_genai(prompt, models=["gemini-2.5-flash","gemini-2.5","text-bison-001"]) 
+                if resp:
+                    response_text = resp.strip()
+                    start_idx = response_text.find('[')
+                    end_idx = response_text.rfind(']')
+                    if start_idx != -1 and end_idx != -1:
+                        json_text = response_text[start_idx:end_idx+1]
+            except Exception as e:
+                logging.debug(f"REST legal references failed: {e}")
+
+        if not json_text:
+            logging.warning("Could not generate legal references via LLM; returning mock references")
             return self._get_mock_legal_references(document_type)
 
         try:
-            client = genai.Client(api_key=self.api_key)
-            
-            prompt = f"""
-            Analyze the following clause from a {document_type} document and identify relevant Indian laws, regulations, and legal references.
-
-            Clause Text: "{clause_text}"
-            Document Type: {document_type}
-            Clause Type: {clause_type}
-
-            Please provide a JSON array of relevant legal references with the following structure:
-            [
-                {{
-                    "id": "unique_id",
-                    "title": "Name of the law/regulation/guideline",
-                    "type": "act|regulation|guideline|rule|circular",
-                    "authority": "Governing authority (e.g., RBI, MCA, Labour Ministry)",
-                    "section": "Specific section/rule number (if applicable)",
-                    "description": "Brief description of relevance to this clause",
-                    "relevance": "high|medium|low",
-                    "url": "Official URL (if available)",
-                    "lastUpdated": "Date when law was last updated (if known)"
-                }}
-            ]
-
-            Focus on Indian laws and regulations. Include acts like:
-            - Indian Contract Act 1872
-            - Consumer Protection Act 2019
-            - Information Technology Act 2000
-            - Companies Act 2013
-            - Labour Codes
-            - RBI Guidelines
-            - Model Tenancy Act 2021
-            - Data Protection laws
-
-            Return only the JSON array, no additional text.
-            """
-
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
-            )
-            
-            response_text = response.text.strip()
-            
-            # Extract JSON from response
-            start_idx = response_text.find('[')
-            end_idx = response_text.rfind(']')
-            
-            if start_idx != -1 and end_idx != -1:
-                json_text = response_text[start_idx:end_idx + 1]
-                import json
-                legal_references = json.loads(json_text)
-                return legal_references
-            else:
-                logging.warning("Could not extract valid JSON from Gemini response")
-                return self._get_mock_legal_references(document_type)
-                
+            import json
+            legal_references = json.loads(json_text)
+            return legal_references
         except Exception as e:
-            logging.error(f"Error getting legal references from Gemini: {e}")
+            logging.error(f"Error parsing legal references JSON: {e}")
             return self._get_mock_legal_references(document_type)
 
     def _get_mock_legal_references(self, document_type: str) -> list:
@@ -804,68 +820,43 @@ This {document_type} has been processed and cleaned for better readability. Whil
         if not self.is_available():
             return self._get_mock_scenarios(document_type, clause_type)
 
-        if not _HAS_GENAI or genai is None:
-            logging.warning("GenAI client not available; returning mock scenarios")
+        prompt = f"Generate what-if scenarios for the following clause from a {document_type} document. Clause Text: \"{clause_text}\". Risk Level: {clause_type}. Return a JSON array of scenarios with fields id,title,description,likelihood,impact,category,outcomes,mitigation,precedent. Return only the JSON array."
+
+        json_text = None
+        if _HAS_GENAI and genai is not None:
+            try:
+                client = genai.Client(api_key=self.api_key)
+                response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+                response_text = (response.text or '').strip()
+                start_idx = response_text.find('[')
+                end_idx = response_text.rfind(']')
+                if start_idx != -1 and end_idx != -1:
+                    json_text = response_text[start_idx:end_idx+1]
+            except Exception as e:
+                logging.debug(f"SDK what-if failed: {e}")
+
+        if not json_text and self.api_key:
+            try:
+                resp = self._generate_content_via_genai(prompt, models=["gemini-2.5-flash","gemini-2.5","text-bison-001"]) 
+                if resp:
+                    response_text = resp.strip()
+                    start_idx = response_text.find('[')
+                    end_idx = response_text.rfind(']')
+                    if start_idx != -1 and end_idx != -1:
+                        json_text = response_text[start_idx:end_idx+1]
+            except Exception as e:
+                logging.debug(f"REST what-if failed: {e}")
+
+        if not json_text:
+            logging.warning("Could not generate what-if scenarios via LLM; returning mock scenarios")
             return self._get_mock_scenarios(document_type, clause_type)
 
         try:
-            client = genai.Client(api_key=self.api_key)
-            
-            prompt = f"""
-            Analyze the following clause from a {document_type} document and generate realistic what-if scenarios.
-
-            Clause Text: "{clause_text}"
-            Document Type: {document_type}
-            Risk Level: {clause_type}
-
-            Please provide a JSON array of what-if scenarios with the following structure:
-            [
-                {{
-                    "id": "unique_scenario_id",
-                    "title": "Scenario Title",
-                    "description": "Brief description of the scenario",
-                    "likelihood": "high|medium|low",
-                    "impact": "high|medium|low", 
-                    "category": "breach|compliance|financial|operational|legal",
-                    "outcomes": ["outcome1", "outcome2", "outcome3"],
-                    "mitigation": ["strategy1", "strategy2", "strategy3"],
-                    "precedent": "Relevant legal precedent (optional)"
-                }}
-            ]
-
-            Focus on:
-            1. Breach scenarios (what happens if clause is violated)
-            2. Compliance issues and regulatory implications
-            3. Financial consequences and cost analysis
-            4. Operational disruptions and business impact
-            5. Legal ramifications and dispute resolution
-
-            Consider Indian legal context and regulations. Provide practical, actionable scenarios.
-            Return only the JSON array, no additional text.
-            """
-
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
-            )
-            
-            response_text = response.text.strip()
-            
-            # Extract JSON from response
-            start_idx = response_text.find('[')
-            end_idx = response_text.rfind(']')
-            
-            if start_idx != -1 and end_idx != -1:
-                json_text = response_text[start_idx:end_idx + 1]
-                import json
-                scenarios = json.loads(json_text)
-                return scenarios
-            else:
-                logging.warning("Could not extract valid JSON from Gemini response")
-                return self._get_mock_scenarios(document_type, clause_type)
-                
+            import json
+            scenarios = json.loads(json_text)
+            return scenarios
         except Exception as e:
-            logging.error(f"Error getting what-if scenarios from Gemini: {e}")
+            logging.error(f"Error parsing what-if JSON: {e}")
             return self._get_mock_scenarios(document_type, clause_type)
 
     def _get_mock_scenarios(self, document_type: str, clause_type: str = "") -> list:
