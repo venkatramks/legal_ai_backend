@@ -55,11 +55,8 @@ class LLMService:
             system_prompt = self._get_system_prompt()
             user_prompt = self._get_user_prompt(document_text, document_type)
 
-            client = genai.Client(api_key=self.api_key)
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=f"{system_prompt}\n\n{user_prompt}"
-            )
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(f"{system_prompt}\n\n{user_prompt}")
 
             guidance = response.text.strip()
             logging.info("Successfully generated legal guidance")
@@ -150,20 +147,24 @@ This {document_type} has been processed and cleaned for better readability. Whil
         # First, try to use the GenAI model to get a concise label if available
         try:
             if self.is_available() and _HAS_GENAI and genai is not None:
-                client = genai.Client(api_key=self.api_key)
                 prompt = (
                     "Classify the following legal document into a single concise type label. "
                     "Return only one short label (no explanation). Examples: 'Contract', 'Lease Agreement', "
                     "'Will', 'Privacy Policy', 'Terms of Service', 'Invoice', 'Legal Notice', 'NDA'.\n\n"
                     "Document Text:\n" + (document_text[:3000] if document_text else "")
                 )
+                resp = None
                 try:
-                    resp = client.models.generate_content(model="gemini-2.5", contents=prompt)
+                    model = genai.GenerativeModel("gemini-1.5")
+                    resp = model.generate_content(prompt)
                 except Exception:
-                    # Some environments may only have flash model; try fallback
-                    resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+                    try:
+                        model = genai.GenerativeModel("gemini-1.5-flash")
+                        resp = model.generate_content(prompt)
+                    except Exception:
+                        logging.debug("All SDK generation attempts failed for document classification", exc_info=True)
 
-                label = (resp.text or '').strip()
+                label = (resp.text or '').strip() if resp is not None else ''
                 # Remove any markdown, quotes, or trailing punctuation
                 if label:
                     label = label.split('\n')[0].strip().strip('"').strip("'")
@@ -286,14 +287,18 @@ This {document_type} has been processed and cleaned for better readability. Whil
 
             full_prompt = system + "\n\n" + user_content
 
-            client = genai.Client(api_key=self.api_key)
-            # Try a stable chat/response model; fall back if necessary
+            resp = None
             try:
-                resp = client.models.generate_content(model="gemini-2.5", contents=full_prompt)
+                model = genai.GenerativeModel("gemini-1.5")
+                resp = model.generate_content(full_prompt)
             except Exception:
-                resp = client.models.generate_content(model="gemini-2.5-flash", contents=full_prompt)
+                try:
+                    model = genai.GenerativeModel("gemini-1.5-flash")
+                    resp = model.generate_content(full_prompt)
+                except Exception:
+                    logging.debug("SDK generation failed for answer_user_query", exc_info=True)
 
-            answer = (resp.text or '').strip()
+            answer = (resp.text or '').strip() if resp is not None else ''
 
             # If the model returns an empty or unhelpful answer, return a clear fallback
             if not answer:
@@ -316,8 +321,8 @@ This {document_type} has been processed and cleaned for better readability. Whil
 
         try:
             prompt = f"Extract the most important clauses from the following document. Return a JSON array of objects with 'id' and 'text' fields. Limit to the top 12 clauses. Document:\n\n{document_text[:8000]}"
-            client = genai.Client(api_key=self.api_key)
-            response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(prompt)
             # Try to parse a JSON array from response.text
             import json
             txt = response.text.strip()
@@ -347,8 +352,8 @@ This {document_type} has been processed and cleaned for better readability. Whil
             import json
             items = [{'id': c['id'], 'text': c['text'][:2000]} for c in clauses]
             prompt = f"For each clause in the following JSON array, assign a risk level: low, medium, or high. Return JSON array of objects with id, clause_text, risk, highlights (array of strings).\n\n{json.dumps(items)}"
-            client = genai.Client(api_key=self.api_key)
-            response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(prompt)
             txt = response.text.strip()
             start = txt.find('[')
             if start != -1:
@@ -377,7 +382,7 @@ This {document_type} has been processed and cleaned for better readability. Whil
             return self._get_mock_legal_references(document_type)
 
         try:
-            client = genai.Client(api_key=self.api_key)
+            model = genai.GenerativeModel("gemini-1.5-flash")
             
             prompt = f"""
             Analyze the following clause from a {document_type} document and identify relevant Indian laws, regulations, and legal references.
@@ -414,11 +419,7 @@ This {document_type} has been processed and cleaned for better readability. Whil
             Return only the JSON array, no additional text.
             """
 
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
-            )
-            
+            response = model.generate_content(prompt)
             response_text = response.text.strip()
             
             # Extract JSON from response
@@ -564,7 +565,7 @@ This {document_type} has been processed and cleaned for better readability. Whil
             return self._get_mock_scenarios(document_type, clause_type)
 
         try:
-            client = genai.Client(api_key=self.api_key)
+            model = genai.GenerativeModel("gemini-1.5-flash")
             
             prompt = f"""
             Analyze the following clause from a {document_type} document and generate realistic what-if scenarios.
@@ -599,11 +600,7 @@ This {document_type} has been processed and cleaned for better readability. Whil
             Return only the JSON array, no additional text.
             """
 
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
-            )
-            
+            response = model.generate_content(prompt)
             response_text = response.text.strip()
             
             # Extract JSON from response
