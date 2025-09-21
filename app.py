@@ -358,9 +358,14 @@ def process_and_cache_document(filepath, ocr_service, text_cleaner, llm_service)
 
     return result, False, document_id
 
-@app.route('/api/process/<file_id>', methods=['POST'])
+@app.route('/api/process/<file_id>', methods=['GET', 'POST'])
 def process_document(file_id):
     try:
+        # Support GET to allow users/browsers to view process status by visiting
+        # `/api/process/<file_id>` in a browser. Delegate to the existing
+        # `process_status` logic so GET behaves like a convenience status check.
+        if request.method == 'GET':
+            return process_status(file_id)
         filepath = os.path.join(UPLOAD_FOLDER, file_id)
 
         if not os.path.exists(filepath):
@@ -926,6 +931,13 @@ def get_what_if_scenarios():
 @app.errorhandler(413)
 def too_large(e):
     return jsonify({'error': 'File too large. Maximum size is 16MB.'}), 413
+
+
+@app.errorhandler(405)
+def method_not_allowed(e):
+    # Return JSON to avoid HTML 405 pages which confuse frontend polling or
+    # users opening endpoints in a browser.
+    return jsonify({'error': 'Method not allowed. Use POST to start processing or GET to check status.'}), 405
 
 @app.errorhandler(404)
 def not_found(e):
