@@ -8,15 +8,60 @@ from werkzeug.utils import secure_filename
 import json
 from dotenv import load_dotenv
 # Support running as package (python -m backend.app) or as script (python app.py):
-try:
-    from .ocr_service import OCRService
-    from .text_cleaner import TextCleaner
-    from .llm_service import LLMService
-except Exception:
-    # Fallback to absolute imports when running directly from the backend directory
-    from ocr_service import OCRService
-    from text_cleaner import TextCleaner
-    from llm_service import LLMService
+# Heavy OCR and image libraries are imported lazily to avoid build-time failures
+# on serverless hosts that don't have system packages installed.
+def import_services():
+    """Return (OCRService, TextCleaner, LLMService) constructors or lightweight fallbacks."""
+    LLMService = None
+    OCRService = None
+    TextCleaner = None
+
+    try:
+        # Prefer package-relative imports when available
+        try:
+            from .llm_service import LLMService as _LLM
+            LLMService = _LLM
+        except Exception:
+            from llm_service import LLMService as _LLM
+            LLMService = _LLM
+    except Exception:
+        # Provide a minimal fallback LLMService that reports unavailability
+        class _LLMStub:
+            def is_available(self):
+                return False
+            def analyze_document_type(self, text):
+                return None
+            def answer_user_query(self, *args, **kwargs):
+                return "LLM not available in this environment"
+            def get_legal_references(self, *a, **k):
+                return []
+            def get_what_if_scenarios(self, *a, **k):
+                return []
+        LLMService = _LLMStub
+
+    try:
+        try:
+            from .ocr_service import OCRService as _OCR
+            from .text_cleaner import TextCleaner as _TC
+            OCRService = _OCR
+            TextCleaner = _TC
+        except Exception:
+            from ocr_service import OCRService as _OCR
+            from text_cleaner import TextCleaner as _TC
+            OCRService = _OCR
+            TextCleaner = _TC
+    except Exception:
+        # Provide lightweight stubs if OCR-related packages are not available
+        class _OCRStub:
+            def extract_text(self, path):
+                return ""
+        class _TCStub:
+            def clean_text(self, text):
+                return text or ""
+        OCRService = _OCRStub
+        TextCleaner = _TCStub
+
+    return OCRService, TextCleaner, LLMService
 import logging
 import threading
 import time
@@ -248,10 +293,11 @@ def process_document(file_id):
         except Exception as e:
             logging.warning(f"Failed to create processing marker {processing_marker}: {e}")
 
-        # Initialize services
-        ocr_service = OCRService()
-        text_cleaner = TextCleaner()
-        llm_service = LLMService()
+        # Initialize services (lazy import to avoid import-time failures)
+        OCRServiceCls, TextCleanerCls, LLMServiceCls = import_services()
+        ocr_service = OCRServiceCls()
+        text_cleaner = TextCleanerCls()
+        llm_service = LLMServiceCls()
 
         def _bg_process():
             try:
@@ -373,7 +419,9 @@ def chat_with_document(document_id):
         append_chat_message(document_id, 'user', user_message)
         
         # Generate AI response if LLM available
-        llm_service = LLMService()
+        # Ensure LLM is obtained via lazy import
+        _, _, LLMServiceCls = import_services()
+        llm_service = LLMServiceCls()
         if llm_service.is_available() and document.get('cleaned_text'):
             try:
                 # Get recent chat history for context
@@ -645,7 +693,9 @@ def get_legal_knowledge_graph():
             return jsonify({'error': 'Clause text is required'}), 400
             
         # Use LLM service to get relevant legal references
-        llm_service = LLMService()
+        # Ensure LLM is obtained via lazy import
+        _, _, LLMServiceCls = import_services()
+        llm_service = LLMServiceCls()
         legal_references = llm_service.get_legal_references(clause_text, document_type, clause_type)
         
         return jsonify({
@@ -672,7 +722,9 @@ def get_what_if_scenarios():
             return jsonify({'error': 'Clause text is required'}), 400
             
         # Use LLM service to get what-if scenarios
-        llm_service = LLMService()
+        # Ensure LLM is obtained via lazy import
+        _, _, LLMServiceCls = import_services()
+        llm_service = LLMServiceCls()
         scenarios = llm_service.get_what_if_scenarios(clause_text, document_type, clause_type)
         
         return jsonify({

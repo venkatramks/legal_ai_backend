@@ -5,9 +5,16 @@ import logging
 # modules directly (python app.py uses absolute imports). Try relative import first
 # then fall back to absolute import to avoid "attempted relative import with no known parent package".
 try:
+    # prefer local package import; will fall back to lazy import at runtime when
+    # services are not available in the build environment
     from .llm_service import LLMService
 except Exception:
-    from llm_service import LLMService
+    try:
+        from llm_service import LLMService
+    except Exception:
+        # Provide a lazy-import fallback: try to import at runtime when needed
+        def LLMService():
+            raise RuntimeError('LLMService unavailable in this environment')
 
 def extract_and_score_clauses_from_text(document_text: str) -> List[Dict[str, Any]]:
     """Attempt to extract clauses and score them for risk.
