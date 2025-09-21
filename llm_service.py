@@ -350,44 +350,132 @@ This {document_type} has been processed and cleaned for better readability. Whil
         if models is None:
             models = ["gemini-2.5", "gemini-2.5-flash", "gemini-1.0"]
 
-        client = self._create_genai_client()
-
+        # If SDK is available, prefer to use the client
         last_exc = None
-        for model in models:
+        if _HAS_GENAI and genai is not None:
+            client = self._create_genai_client()
+
+            for model in models:
+                try:
+                    # Preferred style: client.models.generate_content(...)
+                    if hasattr(client, 'models') and hasattr(client.models, 'generate_content'):
+                        resp = client.models.generate_content(model=model, contents=prompt)
+                        if hasattr(resp, 'text'):
+                            return resp.text
+                        if isinstance(resp, dict) and 'text' in resp:
+                            return resp['text']
+
+                    # Alternate style: client.generate(...) or client.generate_content(...)
+                    if hasattr(client, 'generate'):
+                        resp = client.generate(model=model, prompt=prompt)
+                        if isinstance(resp, dict) and 'text' in resp:
+                            return resp['text']
+                        if hasattr(resp, 'text'):
+                            return resp.text
+
+                    if hasattr(client, 'generate_content'):
+                        resp = client.generate_content(model=model, contents=prompt)
+                        if hasattr(resp, 'text'):
+                            return resp.text
+                        if isinstance(resp, dict) and 'text' in resp:
+                            return resp['text']
+
+                except Exception as e:
+                    last_exc = e
+                    logging.debug(f"Model {model} failed with: {e}")
+                    continue
+
+        # If SDK usage didn't produce a result, and we have an API key, try REST fallback
+        if self.api_key:
             try:
-                # Preferred style: client.models.generate_content(...)
-                if hasattr(client, 'models') and hasattr(client.models, 'generate_content'):
-                    resp = client.models.generate_content(model=model, contents=prompt)
-                    # Many SDK versions attach text on .text
-                    if hasattr(resp, 'text'):
-                        return resp.text
-                    # Or return a dict-like object
-                    if isinstance(resp, dict) and 'text' in resp:
-                        return resp['text']
-
-                # Alternate style: client.generate(...) or client.generate_content(...)
-                if hasattr(client, 'generate'):
-                    resp = client.generate(model=model, prompt=prompt)
-                    if isinstance(resp, dict) and 'text' in resp:
-                        return resp['text']
-                    if hasattr(resp, 'text'):
-                        return resp.text
-
-                if hasattr(client, 'generate_content'):
-                    resp = client.generate_content(model=model, contents=prompt)
-                    if hasattr(resp, 'text'):
-                        return resp.text
-                    if isinstance(resp, dict) and 'text' in resp:
-                        return resp['text']
-
+                rest_result = self._generate_via_rest(prompt, models=models)
+                if rest_result:
+                    return rest_result
             except Exception as e:
-                last_exc = e
-                logging.debug(f"Model {model} failed with: {e}")
-                continue
+                logging.debug(f"REST GenAI fallback failed: {e}")
 
         # If all attempts fail, raise the last exception for callers to handle
         if last_exc:
             raise last_exc
+        return None
+
+    def _generate_via_rest(self, prompt: str, models: Optional[list] = None) -> Optional[str]:
+        """Try to call a Google Generative Language REST endpoint with the API key.
+
+        This is a pragmatic fallback when the GenAI SDK is not installed. It attempts a
+        small set of likely endpoints and response formats. Returns text or None.
+        """
+        if models is None:
+            models = ["text-bison-001", "text-bison", "gemini-2.5", "gemini-2.5-flash"]
+
+        # Allow overriding base URL/model via environment for portability
+        base_url_template = os.getenv('GOOGLE_GENAI_REST_URL') or "https://generativelanguage.googleapis.com/v1beta2/models/{model}:generateText"
+
+        headers = {
+            'Content-Type': 'application/json'
+        }
+
+        for model in models:
+            try:
+                url = base_url_template.format(model=model)
+                # Use API key as query param if that's how user has access configured
+                params = {'key': self.api_key}
+                body = {
+                    'prompt': {'text': prompt},
+                    # conservative defaults
+                    'temperature': 0.2,
+                    'maxOutputTokens': 512
+                }
+
+                resp = requests.post(url, headers=headers, params=params, json=body, timeout=30)
+                if resp.status_code != 200:
+                    logging.debug(f"REST call to {url} failed: {resp.status_code} {resp.text}")
+                    continue
+
+                j = resp.json()
+
+                # Try common response shapes
+                # 1) {'candidates': [{'content': '...'}]}
+                cands = j.get('candidates') or j.get('outputs') or j.get('choices')
+                if isinstance(cands, list) and len(cands) > 0:
+                    first = cands[0]
+                    for key in ('content', 'text', 'output', 'message'):
+                        if isinstance(first, dict) and key in first:
+                            return first[key]
+                    # If the structure is simple string inside first
+                    if isinstance(first, str):
+                        return first
+
+                # 2) {'output': '...'} or {'text': '...'}
+                for k in ('output', 'text', 'content'):
+                    if k in j and isinstance(j[k], str):
+                        return j[k]
+
+                # 3) nested fields
+                # Try to coalesce any string present
+                def find_first_string(obj):
+                    if isinstance(obj, str):
+                        return obj
+                    if isinstance(obj, dict):
+                        for v in obj.values():
+                            res = find_first_string(v)
+                            if res:
+                                return res
+                    if isinstance(obj, list):
+                        for item in obj:
+                            res = find_first_string(item)
+                            if res:
+                                return res
+                    return None
+
+                s = find_first_string(j)
+                if s:
+                    return s
+
+            except Exception as e:
+                logging.debug(f"REST attempt for model {model} failed: {e}")
+                continue
+
         return None
 
     # ----- Clause extraction helpers -----
