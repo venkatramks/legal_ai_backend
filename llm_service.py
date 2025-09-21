@@ -440,72 +440,112 @@ This {document_type} has been processed and cleaned for better readability. Whil
             models = ["text-bison-001", "text-bison", "gemini-2.5", "gemini-2.5-flash"]
 
         # Allow overriding base URL/model via environment for portability
-        base_url_template = os.getenv('GOOGLE_GENAI_REST_URL') or "https://generativelanguage.googleapis.com/v1beta2/models/{model}:generateText"
+        # Accept GOOGLE_GENAI_REST_URL or GEMINI_API_URL (user-provided) as primary
+        env_url = os.getenv('GOOGLE_GENAI_REST_URL') or os.getenv('GEMINI_API_URL') or os.getenv('GEMINI_REST_URL')
+        default_template = "https://generativelanguage.googleapis.com/v1beta2/models/{model}:generateText"
+        headers_base = {'Content-Type': 'application/json'}
 
-        headers = {
-            'Content-Type': 'application/json'
-        }
+        def try_parse_response_json(j):
+            # Common candidate locations
+            cands = j.get('candidates') or j.get('outputs') or j.get('choices') or j.get('output')
+            if isinstance(cands, list) and len(cands) > 0:
+                first = cands[0]
+                # nested patterns
+                if isinstance(first, dict):
+                    # content -> text, message -> content -> text, output -> content
+                    for path in (('content','text'), ('message','content','text'), ('output','content'), ('text',), ('content',)):
+                        cur = first
+                        ok = True
+                        for p in path:
+                            if isinstance(cur, dict) and p in cur:
+                                cur = cur[p]
+                            else:
+                                ok = False
+                                break
+                        if ok and isinstance(cur, str):
+                            return cur
+                if isinstance(first, str):
+                    return first
 
+            # top-level string fields
+            for k in ('output','text','content','message'):
+                v = j.get(k)
+                if isinstance(v, str):
+                    return v
+
+            # deeper search
+            def find_first_string(obj):
+                if isinstance(obj, str):
+                    return obj
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        res = find_first_string(v)
+                        if res:
+                            return res
+                if isinstance(obj, list):
+                    for item in obj:
+                        res = find_first_string(item)
+                        if res:
+                            return res
+                return None
+
+            return find_first_string(j)
+
+        # Try each model and multiple auth/header/body variants
         for model in models:
-            try:
-                url = base_url_template.format(model=model)
-                # Use API key as query param if that's how user has access configured
-                params = {'key': self.api_key}
-                body = {
-                    'prompt': {'text': prompt},
-                    # conservative defaults
-                    'temperature': 0.2,
-                    'maxOutputTokens': 512
-                }
+            # Build candidate URLs to try
+            urls = []
+            if env_url:
+                # If env_url contains {model} placeholder, format it
+                if '{model}' in env_url:
+                    urls.append(env_url.format(model=model))
+                else:
+                    urls.append(env_url)
+            # default Google template
+            urls.append(default_template.format(model=model))
 
-                resp = requests.post(url, headers=headers, params=params, json=body, timeout=30)
-                if resp.status_code != 200:
-                    logging.debug(f"REST call to {url} failed: {resp.status_code} {resp.text}")
+            for url in urls:
+                try:
+                    # Try both auth styles: Bearer header and API key query param
+                    # Try different body shapes that various endpoints may accept
+                    bodies = [
+                        {'prompt': {'text': prompt}, 'temperature': 0.2, 'maxOutputTokens': 1024},
+                        {'input': prompt},
+                        {'instances': [{'input': prompt}]},
+                        {'messages': [{'role': 'user', 'content': prompt}]}
+                    ]
+
+                    # Prepare headers for two auth options
+                    header_opts = [dict(headers_base), dict(headers_base)]
+                    # Bearer token
+                    header_opts[0]['Authorization'] = f"Bearer {self.api_key}"
+                    # second option keeps only content-type (we'll use key query param)
+
+                    for headers in header_opts:
+                        for body in bodies:
+                            try:
+                                # Use key param when Authorization header not set
+                                params = None
+                                if 'Authorization' not in headers:
+                                    params = {'key': self.api_key}
+
+                                resp = requests.post(url, headers=headers, params=params, json=body, timeout=30)
+                                if resp.status_code != 200:
+                                    logging.debug(f"REST call to {url} returned {resp.status_code}: {resp.text}")
+                                    continue
+
+                                j = resp.json()
+                                parsed = try_parse_response_json(j)
+                                if parsed:
+                                    return parsed
+
+                            except Exception as e:
+                                logging.debug(f"REST body attempt failed for {url}: {e}")
+                                continue
+
+                except Exception as e:
+                    logging.debug(f"REST attempt for model {model} at {url} failed: {e}")
                     continue
-
-                j = resp.json()
-
-                # Try common response shapes
-                # 1) {'candidates': [{'content': '...'}]}
-                cands = j.get('candidates') or j.get('outputs') or j.get('choices')
-                if isinstance(cands, list) and len(cands) > 0:
-                    first = cands[0]
-                    for key in ('content', 'text', 'output', 'message'):
-                        if isinstance(first, dict) and key in first:
-                            return first[key]
-                    # If the structure is simple string inside first
-                    if isinstance(first, str):
-                        return first
-
-                # 2) {'output': '...'} or {'text': '...'}
-                for k in ('output', 'text', 'content'):
-                    if k in j and isinstance(j[k], str):
-                        return j[k]
-
-                # 3) nested fields
-                # Try to coalesce any string present
-                def find_first_string(obj):
-                    if isinstance(obj, str):
-                        return obj
-                    if isinstance(obj, dict):
-                        for v in obj.values():
-                            res = find_first_string(v)
-                            if res:
-                                return res
-                    if isinstance(obj, list):
-                        for item in obj:
-                            res = find_first_string(item)
-                            if res:
-                                return res
-                    return None
-
-                s = find_first_string(j)
-                if s:
-                    return s
-
-            except Exception as e:
-                logging.debug(f"REST attempt for model {model} failed: {e}")
-                continue
 
         return None
 
