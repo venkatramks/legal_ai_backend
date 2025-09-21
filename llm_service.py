@@ -2,7 +2,42 @@ import requests
 import os
 from typing import Optional, Dict, Any
 import logging
-from cachetools import TTLCache
+try:
+    from cachetools import TTLCache
+except Exception:
+    # Lightweight fallback TTLCache for environments without cachetools
+    import time
+    class TTLCache(dict):
+        def __init__(self, maxsize=128, ttl=300):
+            super().__init__()
+            self._ttl = ttl
+            self._meta = {}
+
+        def __setitem__(self, key, value):
+            super().__setitem__(key, value)
+            self._meta[key] = time.time()
+
+        def __getitem__(self, key):
+            t = self._meta.get(key)
+            if t and (time.time() - t) > self._ttl:
+                # expired
+                try:
+                    del self._meta[key]
+                except Exception:
+                    pass
+                try:
+                    super().__delitem__(key)
+                except Exception:
+                    pass
+                raise KeyError(key)
+            return super().__getitem__(key)
+
+        def __contains__(self, key):
+            try:
+                _ = self.__getitem__(key)
+                return True
+            except KeyError:
+                return False
 _HAS_GENAI = False
 genai = None  # type: ignore
 try:
@@ -232,13 +267,9 @@ This {document_type} has been processed and cleaned for better readability. Whil
                 "or you can persist the document and view clause highlights."
             )
 
-        # If GenAI client not present, return fallback
+        # Don't return early if SDK missing — allow REST fallback to run via helpers
         if not _HAS_GENAI or genai is None:
-            logging.warning("GenAI client not available; returning fallback answer")
-            return (
-                "AI model unavailable. Please try again later or enable the GenAI client. "
-                "You can also ask about specific clause text by pasting it here."
-            )
+            logging.info("GenAI SDK not present locally; will attempt REST fallback if GOOGLE_API_KEY is set")
 
         try:
             # Attempt to focus the answer on the most relevant clause(s).

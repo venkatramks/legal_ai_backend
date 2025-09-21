@@ -815,6 +815,69 @@ def get_legal_knowledge_graph():
         logging.error(f"Legal knowledge graph failed: {e}")
         return jsonify({'error': f'Legal knowledge graph failed: {str(e)}'}), 500
 
+
+@app.route('/api/debug/llm', methods=['GET'])
+def debug_llm():
+    """Return diagnostic info about LLM availability and environment variables."""
+    try:
+        # Lazy import the LLMService class
+        _, _, LLMServiceCls = import_services()
+        llm = LLMServiceCls()
+
+        # Try to introspect llm_service module flags without importing at top-level
+        try:
+            try:
+                from . import llm_service as _llm_mod
+            except Exception:
+                import llm_service as _llm_mod
+            has_genai = bool(getattr(_llm_mod, '_HAS_GENAI', False) and getattr(_llm_mod, 'genai', None) is not None)
+        except Exception:
+            has_genai = False
+
+        info = {
+            'llm_is_available': bool(llm.is_available()),
+            'google_api_key_present': bool(os.getenv('GOOGLE_API_KEY')),
+            'has_genai_sdk': has_genai,
+            'allow_llm_test': os.getenv('ALLOW_LLM_TEST', '0') == '1'
+        }
+        return jsonify(info), 200
+    except Exception as e:
+        logging.error(f"LLM debug failed: {e}")
+        return jsonify({'error': f'LLM debug failed: {str(e)}'}), 500
+
+
+@app.route('/api/debug/llm/test', methods=['POST'])
+def debug_llm_test():
+    """Optionally run a small LLM generation test if explicitly allowed.
+
+    This endpoint will only perform a network/LLM call if ALLOW_LLM_TEST=1 in env to avoid
+    accidental external calls from automated systems.
+    """
+    try:
+        if os.getenv('ALLOW_LLM_TEST', '0') != '1':
+            return jsonify({'error': 'LLM test not allowed. Set ALLOW_LLM_TEST=1 to enable.'}), 403
+
+        data = request.get_json() or {}
+        prompt = data.get('prompt') or 'Say hello in one short sentence.'
+
+        _, _, LLMServiceCls = import_services()
+        llm = LLMServiceCls()
+
+        if not llm.is_available():
+            return jsonify({'error': 'LLM not available in this environment'}), 503
+
+        # Try a lightweight generation via the existing helper
+        try:
+            text = llm.generate_legal_guidance(prompt, document_type='test')
+        except Exception as e:
+            logging.error(f"LLM generation test failed: {e}")
+            return jsonify({'error': f'LLM generation test failed: {str(e)}'}), 500
+
+        return jsonify({'result': text}), 200
+    except Exception as e:
+        logging.error(f"LLM test endpoint failed: {e}")
+        return jsonify({'error': f'LLM test endpoint failed: {str(e)}'}), 500
+
 @app.route('/api/what-if-scenarios', methods=['POST'])
 def get_what_if_scenarios():
     """Get what-if scenarios for a clause"""
