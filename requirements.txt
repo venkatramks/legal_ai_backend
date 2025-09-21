@@ -7,3 +7,4 @@ requests
 pdfminer.six
 Pillow
 pytesseract
+google-generativeai
