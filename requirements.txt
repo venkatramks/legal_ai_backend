@@ -1,0 +1,10 @@
+flask
+flask-cors
+pytesseract
+pdf2image
+opencv-python
+Pillow
+werkzeug
+openai
+python-dotenv
+gemini

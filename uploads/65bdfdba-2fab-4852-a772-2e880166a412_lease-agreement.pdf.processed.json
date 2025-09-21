@@ -1,0 +1,13 @@
+{
+  "file_id": "65bdfdba-2fab-4852-a772-2e880166a412_lease-agreement.pdf",
+  "raw_text": "File has already been processed.",
+  "cleaned_text": "File has already been processed.",
+  "document_type": "legal document",
+  "guidance": "This document means your specific task or record, referred to as the \"file,\" has completed its intended procedure or review (\"processed\"). It does not indicate the outcome or what happens next.\n\nNo specific obligations, rights, dates, or deadlines are stated, only that a past action occurred.\n\nPotential implications are unclear without more context. \"Processed\" could mean approval, rejection, or simply moving to the next stage.\n\nYour next step should be to contact the sender or relevant authority. Ask what \"processed\" specifically means for your situation, what the result is, and what action you should take now. This information is for educational purposes only; consult a legal professional for advice.",
+  "llm_available": true,
+  "statistics": {
+    "raw_length": 32,
+    "cleaned_length": 32,
+    "reduction_percentage": 0.0
+  }
+}

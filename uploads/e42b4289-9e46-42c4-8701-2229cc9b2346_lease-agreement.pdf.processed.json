@@ -1,0 +1,13 @@
+{
+  "file_id": "e42b4289-9e46-42c4-8701-2229cc9b2346_lease-agreement.pdf",
+  "raw_text": "File has already been processed.",
+  "cleaned_text": "File has already been processed.",
+  "document_type": "legal document",
+  "guidance": "Here's a plain-language explanation of \"File has already been processed\":\n\n*   **Summary:** This brief statement indicates a \"file\" (a document or request) has been \"processed,\" meaning an action or task related to it has been completed.\n*   **Key Terms:** \"Processed\" means the file has gone through its necessary steps. No specific obligations or rights are mentioned here.\n*   **Dates/Conditions:** No dates, deadlines, or conditions are provided in this short text.\n*   **Implications:** This message, on its own, lacks detail. You need to know *which* file and *what the outcome* of its processing is.\n*   **Next Steps:** Immediately seek more information. Ask: \"Which file? What was the result of processing? What happens next?\"\n\n*Disclaimer: This is educational information only, not legal advice. Consult a legal professional for specific guidance.*",
+  "llm_available": true,
+  "statistics": {
+    "raw_length": 32,
+    "cleaned_length": 32,
+    "reduction_percentage": 0.0
+  }
+}

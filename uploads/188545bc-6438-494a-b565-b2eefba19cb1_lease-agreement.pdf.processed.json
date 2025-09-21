@@ -1,0 +1,13 @@
+{
+  "file_id": "188545bc-6438-494a-b565-b2eefba19cb1_lease-agreement.pdf",
+  "raw_text": "File has already been processed.",
+  "cleaned_text": "File has already been processed.",
+  "document_type": "legal document",
+  "guidance": "This is a brief status update indicating a \"file\" (e.g., application, document, case) has completed a stage.\n\n*   **\"Processed\"**: Means the file has been handled, reviewed, or acted upon through its designated steps.\n*   **Dates**: No specific dates or deadlines are given; it simply confirms the action is *already done*.\n*   **Implications**: This particular step is complete. The next actions depend on what the file relates to.\n*   **Next Steps**: Determine what \"file\" this refers to and what processing was completed. Seek further context or instructions from the sender.\n\n*Disclaimer: This is for educational purposes only, not legal advice. Consult a legal professional for specific guidance.*",
+  "llm_available": true,
+  "statistics": {
+    "raw_length": 32,
+    "cleaned_length": 32,
+    "reduction_percentage": 0.0
+  }
+}
