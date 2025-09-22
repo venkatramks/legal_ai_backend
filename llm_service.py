@@ -26,6 +26,89 @@ class LLMService:
         """Check if the LLM service is available and configured."""
         return self.api_key is not None
 
+    def _rest_generate(self, prompt: str, model: str = 'gemini-1.5-flash') -> Optional[str]:
+        """Fallback to calling the GenAI REST endpoint directly when SDK unavailable.
+
+        Uses `GEMINI_API_URL` env var as full endpoint base (optional). If not
+        provided, falls back to the Google generativelanguage endpoint with the
+        API key as a query parameter. Returns the generated text or None on error.
+        """
+        try:
+            api_key = self.api_key
+            if not api_key:
+                logging.debug("REST generate called without API key")
+                return None
+
+            # Allow overriding the full URL via GEMINI_API_URL env var.
+            base = os.getenv('GEMINI_API_URL')
+            if base:
+                # If base does not contain model, append model action
+                if '{model}' in base:
+                    url = base.format(model=model)
+                else:
+                    # assume the URL is a full generate endpoint
+                    url = base
+            else:
+                # Default Google Generative Language REST API pattern
+                url = f"https://generativelanguage.googleapis.com/v1beta2/models/{model}:generate?key={api_key}"
+
+            headers = {
+                'Content-Type': 'application/json'
+            }
+
+            payload = {
+                'prompt': {
+                    'text': prompt
+                },
+                # Provide a conservative configuration
+                'temperature': 0.2,
+                'maxOutputTokens': 1024
+            }
+
+            resp = requests.post(url, json=payload, headers=headers, timeout=30)
+            if resp.status_code not in (200, 201):
+                logging.warning(f"GenAI REST call failed: {resp.status_code} {resp.text}")
+                return None
+
+            data = resp.json()
+            # Try common response shapes: candidates[*].content or candidates[*].output
+            text = None
+            # v1beta2 often returns 'candidates' with 'content'
+            if isinstance(data, dict):
+                if 'candidates' in data and isinstance(data['candidates'], list) and len(data['candidates']) > 0:
+                    c = data['candidates'][0]
+                    text = c.get('content') or c.get('text') or c.get('output')
+                # Some endpoints may return 'output' -> 'candidates' inside
+                if not text and 'output' in data:
+                    out = data['output']
+                    if isinstance(out, dict) and 'content' in out:
+                        text = out.get('content')
+            if not text:
+                # Last resort: try to extract any string field in the JSON
+                def find_text(obj):
+                    if isinstance(obj, str):
+                        return obj
+                    if isinstance(obj, dict):
+                        for v in obj.values():
+                            t = find_text(v)
+                            if t:
+                                return t
+                    if isinstance(obj, list):
+                        for v in obj:
+                            t = find_text(v)
+                            if t:
+                                return t
+                    return None
+
+                text = find_text(data)
+
+            if isinstance(text, str):
+                return text.strip()
+            return None
+        except Exception as e:
+            logging.error(f"REST GenAI request failed: {e}")
+            return None
+
     def generate_legal_guidance(self, document_text: str, document_type: str = "legal document") -> Optional[str]:
         """
         Generate legal guidance and simplified explanations for a legal document.
@@ -46,9 +129,17 @@ class LLMService:
             logging.info("Returning cached result for the document")
             return self.cache[cache_key]
 
-        # If GenAI client isn't available, return fallback guidance
+        # If GenAI client isn't available, try REST fallback before returning guidance
         if not _HAS_GENAI or genai is None:
-            logging.warning("GenAI client not available; returning fallback guidance")
+            logging.info("GenAI SDK not available; attempting REST fallback for guidance")
+            system_prompt = self._get_system_prompt()
+            user_prompt = self._get_user_prompt(document_text, document_type)
+            prompt = system_prompt + "\n\n" + user_prompt
+            rest_text = self._rest_generate(prompt)
+            if rest_text:
+                self.cache[cache_key] = rest_text
+                return rest_text
+            logging.warning("REST fallback did not return guidance; returning generic fallback guidance")
             return self._get_fallback_guidance(document_type)
 
         try:
@@ -155,8 +246,14 @@ This {document_type} has been processed and cleaned for better readability. Whil
                 )
                 resp = None
                 try:
-                    model = genai.GenerativeModel("gemini-1.5")
-                    resp = model.generate_content(prompt)
+                        # Try REST fallback if SDK generation isn't available
+                        if not _HAS_GENAI or genai is None:
+                            rest = self._rest_generate(prompt, model='gemini-1.5')
+                            label = (rest or '').strip()
+                        else:
+                            model = genai.GenerativeModel("gemini-1.5")
+                            resp = model.generate_content(prompt)
+                            label = (resp.text or '').strip() if resp is not None else ''
                 except Exception:
                     try:
                         model = genai.GenerativeModel("gemini-1.5-flash")
@@ -164,7 +261,8 @@ This {document_type} has been processed and cleaned for better readability. Whil
                     except Exception:
                         logging.debug("All SDK generation attempts failed for document classification", exc_info=True)
 
-                label = (resp.text or '').strip() if resp is not None else ''
+                # label variable may have been set by REST or SDK path above
+                label = (label or '')
                 # Remove any markdown, quotes, or trailing punctuation
                 if label:
                     label = label.split('\n')[0].strip().strip('"').strip("'")
@@ -187,7 +285,7 @@ This {document_type} has been processed and cleaned for better readability. Whil
             # Fall back to keyword heuristics below
             logging.debug(f"GenAI document type classification failed: {e}")
 
-        # Keyword-based fallback detection
+    # Keyword-based fallback detection
         text_lower = (document_text or '').lower()
         if any(word in text_lower for word in ['contract', 'agreement', 'party', 'whereas']):
             return "Contract"
@@ -225,9 +323,27 @@ This {document_type} has been processed and cleaned for better readability. Whil
                 "or you can persist the document and view clause highlights."
             )
 
-        # If GenAI client not present, return fallback
+        # If GenAI client not present, attempt REST-based answer before returning fallback
         if not _HAS_GENAI or genai is None:
-            logging.warning("GenAI client not available; returning fallback answer")
+            logging.info("GenAI SDK not available; attempting REST fallback for user query")
+            # Build a prompt similar to the SDK path but operating directly on the document snippet
+            snippet_len = 2000
+            clause_to_use = (document_text or '')[:snippet_len]
+            system = (
+                "You are a helpful assistant that answers questions strictly from the supplied clause text. "
+                "Do NOT provide any additional general legal guidance or paragraphs. If the clause does not contain enough information to answer, reply exactly: 'Insufficient information in the clause to answer.' "
+                "Do not invent facts or cite laws not present in the clause. Keep the answer short and directly tied to the clause."
+            )
+            user_content = f"Clause Text:\n{clause_to_use}\n\nUser Question:\n{user_query}"
+            if chat_history:
+                user_content = f"Chat History:\n{chat_history}\n\n" + user_content
+
+            full_prompt = system + "\n\n" + user_content
+            rest_answer = self._rest_generate(full_prompt)
+            if rest_answer:
+                return rest_answer
+
+            logging.warning("REST fallback did not return an answer; returning generic fallback message")
             return (
                 "AI model unavailable. Please try again later or enable the GenAI client. "
                 "You can also ask about specific clause text by pasting it here."
@@ -288,17 +404,26 @@ This {document_type} has been processed and cleaned for better readability. Whil
             full_prompt = system + "\n\n" + user_content
 
             resp = None
+            answer = ''
             try:
-                model = genai.GenerativeModel("gemini-1.5")
-                resp = model.generate_content(full_prompt)
-            except Exception:
-                try:
-                    model = genai.GenerativeModel("gemini-1.5-flash")
-                    resp = model.generate_content(full_prompt)
-                except Exception:
-                    logging.debug("SDK generation failed for answer_user_query", exc_info=True)
+                if _HAS_GENAI and genai is not None:
+                    try:
+                        model = genai.GenerativeModel("gemini-1.5")
+                        resp = model.generate_content(full_prompt)
+                    except Exception:
+                        try:
+                            model = genai.GenerativeModel("gemini-1.5-flash")
+                            resp = model.generate_content(full_prompt)
+                        except Exception:
+                            logging.debug("SDK generation failed for answer_user_query", exc_info=True)
 
-            answer = (resp.text or '').strip() if resp is not None else ''
+                    answer = (resp.text or '').strip() if resp is not None else ''
+                else:
+                    # Already attempted REST earlier for the no-SDK branch, but try once more
+                    rest = self._rest_generate(full_prompt)
+                    answer = (rest or '').strip()
+            except Exception:
+                logging.debug("Generation failed for answer_user_query", exc_info=True)
 
             # If the model returns an empty or unhelpful answer, return a clear fallback
             if not answer:
@@ -315,8 +440,27 @@ This {document_type} has been processed and cleaned for better readability. Whil
 
         Returns a list of {'id': str, 'text': str} or raises on failure.
         """
-        # If GenAI client isn't available, raise so callers can fallback to heuristics
+        # If GenAI client isn't available, try REST fallback but raise if that fails
         if not _HAS_GENAI or genai is None:
+            logging.info("GenAI SDK not available; attempting REST fallback for clause extraction")
+            prompt = f"Extract the most important clauses from the following document. Return a JSON array of objects with 'id' and 'text' fields. Limit to the top 12 clauses. Document:\n\n{document_text[:8000]}"
+            rest = self._rest_generate(prompt)
+            if rest:
+                try:
+                    import json
+                    txt = rest.strip()
+                    start = txt.find('[')
+                    if start != -1:
+                        txt = txt[start:]
+                    data = json.loads(txt)
+                    clauses = []
+                    for i, item in enumerate(data):
+                        if isinstance(item, dict) and 'text' in item:
+                            clauses.append({'id': item.get('id') or f'c{i+1}', 'text': item['text']})
+                    return clauses
+                except Exception:
+                    logging.debug("REST clause extraction returned unparsable JSON", exc_info=True)
+            # If REST fallback didn't work, raise to let caller fallback to heuristics
             raise RuntimeError("LLM client not available for clause extraction")
 
         try:
@@ -346,6 +490,20 @@ This {document_type} has been processed and cleaned for better readability. Whil
         Expects clauses as [{'id':..., 'text':...}]. Returns [{'id','clause_text','risk','highlights'}]
         """
         if not _HAS_GENAI or genai is None:
+            logging.info("GenAI SDK not available; attempting REST fallback for clause scoring")
+            try:
+                import json
+                items = [{'id': c['id'], 'text': c['text'][:2000]} for c in clauses]
+                prompt = f"For each clause in the following JSON array, assign a risk level: low, medium, or high. Return JSON array of objects with id, clause_text, risk, highlights (array of strings).\n\n{json.dumps(items)}"
+                rest = self._rest_generate(prompt, model='gemini-1.5-flash')
+                if rest:
+                    txt = rest.strip()
+                    start = txt.find('[')
+                    if start != -1:
+                        txt = txt[start:]
+                    return json.loads(txt)
+            except Exception:
+                logging.debug("REST clause scoring failed or returned unparsable JSON", exc_info=True)
             raise RuntimeError("LLM client not available for clause scoring")
 
         try:
@@ -378,7 +536,45 @@ This {document_type} has been processed and cleaned for better readability. Whil
             return self._get_mock_legal_references(document_type)
 
         if not _HAS_GENAI or genai is None:
-            logging.warning("GenAI client not available; returning mock legal references")
+            logging.info("GenAI SDK not available; attempting REST fallback for legal references")
+            # Try to call REST endpoint to get references
+            prompt = f"""
+            Analyze the following clause from a {document_type} document and identify relevant Indian laws, regulations, and legal references.
+
+            Clause Text: "{clause_text}"
+            Document Type: {document_type}
+            Clause Type: {clause_type}
+
+            Please provide a JSON array of relevant legal references with the following structure:
+            [
+                {{
+                    "id": "unique_id",
+                    "title": "Name of the law/regulation/guideline",
+                    "type": "act|regulation|guideline|rule|circular",
+                    "authority": "Governing authority (e.g., RBI, MCA, Labour Ministry)",
+                    "section": "Specific section/rule number (if applicable)",
+                    "description": "Brief description of relevance to this clause",
+                    "relevance": "high|medium|low",
+                    "url": "Official URL (if available)",
+                    "lastUpdated": "Date when law was last updated (if known)"
+                }}
+            ]
+
+            Focus on Indian laws and regulations. Return only the JSON array, no additional text.
+            """
+            rest = self._rest_generate(prompt)
+            if rest:
+                try:
+                    start_idx = rest.find('[')
+                    end_idx = rest.rfind(']')
+                    if start_idx != -1 and end_idx != -1:
+                        json_text = rest[start_idx:end_idx + 1]
+                        import json
+                        legal_references = json.loads(json_text)
+                        return legal_references
+                except Exception:
+                    logging.debug("REST legal references returned unparsable JSON", exc_info=True)
+            logging.warning("REST fallback did not return legal references; returning mock/legal discovery list")
             return self._get_mock_legal_references(document_type)
 
         try:
@@ -551,7 +747,44 @@ This {document_type} has been processed and cleaned for better readability. Whil
             return self._get_mock_scenarios(document_type, clause_type)
 
         if not _HAS_GENAI or genai is None:
-            logging.warning("GenAI client not available; returning mock scenarios")
+            logging.info("GenAI SDK not available; attempting REST fallback for what-if scenarios")
+            prompt = f"""
+            Analyze the following clause from a {document_type} document and generate realistic what-if scenarios.
+
+            Clause Text: "{clause_text}"
+            Document Type: {document_type}
+            Risk Level: {clause_type}
+
+            Please provide a JSON array of what-if scenarios with the following structure:
+            [
+                {{
+                    "id": "unique_scenario_id",
+                    "title": "Scenario Title",
+                    "description": "Brief description of the scenario",
+                    "likelihood": "high|medium|low",
+                    "impact": "high|medium|low", 
+                    "category": "breach|compliance|financial|operational|legal",
+                    "outcomes": ["outcome1", "outcome2", "outcome3"],
+                    "mitigation": ["strategy1", "strategy2", "strategy3"],
+                    "precedent": "Relevant legal precedent (optional)"
+                }}
+            ]
+
+            Focus on breach, compliance, financial, operational, and legal impacts. Return only the JSON array, no additional text.
+            """
+            rest = self._rest_generate(prompt)
+            if rest:
+                try:
+                    start_idx = rest.find('[')
+                    end_idx = rest.rfind(']')
+                    if start_idx != -1 and end_idx != -1:
+                        json_text = rest[start_idx:end_idx + 1]
+                        import json
+                        scenarios = json.loads(json_text)
+                        return scenarios
+                except Exception:
+                    logging.debug("REST what-if scenarios returned unparsable JSON", exc_info=True)
+            logging.warning("REST fallback did not produce scenarios; returning mock skeletons")
             return self._get_mock_scenarios(document_type, clause_type)
 
         try:
