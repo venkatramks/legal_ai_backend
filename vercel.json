@@ -1,12 +1,12 @@
 {
   "version": 2,
   "functions": {
-    "api/app.py": {
+    "backend/api/app.py": {
       "runtime": "@vercel/python@0.5.0",
       "memory": 1024,
       "maxDuration": 300
     },
-    "api/**/*.py": {
+    "backend/api/**/*.py": {
       "runtime": "@vercel/python@0.5.0",
       "memory": 1024,
       "maxDuration": 300
@@ -15,7 +15,7 @@
   "routes": [
     {
       "src": "^/(.*)",
-      "dest": "api/app.py"
+      "dest": "backend/api/app.py"
     }
   ]
 }
