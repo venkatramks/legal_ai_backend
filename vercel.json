@@ -2,12 +2,12 @@
   "version": 2,
   "functions": {
     "api/app.py": {
-      "runtime": "python3.11",
+      "runtime": "@vercel/python@0.5.0",
       "memory": 1024,
       "maxDuration": 300
     },
     "api/**/*.py": {
-      "runtime": "python3.11",
+      "runtime": "@vercel/python@0.5.0",
       "memory": 1024,
       "maxDuration": 300
     }
